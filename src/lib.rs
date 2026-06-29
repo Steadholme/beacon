@@ -47,6 +47,11 @@ pub fn app(state: AppState) -> Router {
         // --- admin (gateway auth=sso; reads injected X-Auth-* identity) ---
         .route("/admin", get(handlers::admin::admin_page))
         .route("/admin/incidents", post(handlers::admin::create_incident))
+        // Sluice forwards the gateway prefix UNMODIFIED (no strip): the admin dashboard is
+        // mounted at the `/beacon` route, so a request arrives here as `GET /beacon`.
+        // Register the admin page as the fallback (mirrors watchtower) so it renders behind
+        // the gateway prefix. The public /status route stays an explicit match above.
+        .fallback(get(handlers::admin::admin_page))
         .with_state(state)
 }
 
