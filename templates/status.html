@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Status · HOLDFAST</title>
+  <style>{{CSS}}</style>
+</head>
+<body class="page-console">
+  <header class="topbar">
+    <div class="topbar__inner">
+      <a class="brand" href="/status" aria-label="HOLDFAST status home">
+        <span class="brand__glyph" aria-hidden="true">{{SHIELD}}</span>
+        <span class="brand__word">HOLDFAST</span>
+      </a>
+      <div class="topbar__right">
+        <span class="topbar__title">System Status</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="console">
+    <div class="console__head">
+      <h1>System status</h1>
+      <p class="sub">Live availability of the HOLDFAST sovereign infrastructure.</p>
+    </div>
+
+    {{BANNER}}
+
+    <section class="card">
+      <div class="card__head"><h2>Components</h2></div>
+      <div class="card__body">
+        {{COMPONENTS}}
+      </div>
+    </section>
+
+    <h2 class="section-title">Incidents</h2>
+    {{INCIDENTS}}
+  </main>
+
+  <footer class="site-foot">
+    <span>HOLDFAST · Sovereign infrastructure</span>
+    <span>Updated {{UPDATED}}</span>
+  </footer>
+</body>
+</html>
