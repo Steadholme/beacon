@@ -24,7 +24,7 @@ const ADMIN_HTML: &str = include_str!("../../templates/admin.html");
 pub async fn admin_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
     let email = auth::admin_email(&headers).unwrap_or_else(|| "operator".to_string());
     let now = now_secs();
-    Html(render_admin(&state, &email, now))
+    Html(render_admin(&state, &email, now).await)
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,30 +63,30 @@ pub async fn create_incident(
         created_at: now,
         updated_at: now,
     };
-    state.store.insert_incident(&incident);
+    state.store.insert_incident(&incident).await;
     tracing::info!(id = incident.id, title = incident.title, "incident posted");
 
     // 303 -> GET /admin (post/redirect/get).
     Ok((StatusCode::SEE_OTHER, [(header::LOCATION, "/admin")]).into_response())
 }
 
-fn render_admin(state: &AppState, email: &str, now: i64) -> String {
+async fn render_admin(state: &AppState, email: &str, now: i64) -> String {
     ADMIN_HTML
         .replace("{{CSS}}", APP_CSS)
         .replace("{{SHIELD}}", SHIELD_SVG)
         .replace("{{EMAIL}}", &esc(email))
-        .replace("{{CHECKS}}", &render_checks(state))
-        .replace("{{INCIDENTS}}", &render_incidents(state, now))
+        .replace("{{CHECKS}}", &render_checks(state).await)
+        .replace("{{INCIDENTS}}", &render_incidents(state, now).await)
 }
 
-fn render_checks(state: &AppState) -> String {
-    let checks = state.store.list_checks();
+async fn render_checks(state: &AppState) -> String {
+    let checks = state.store.list_checks().await;
     if checks.is_empty() {
         return r#"<tr><td colspan="4" class="empty">No checks configured.</td></tr>"#.to_string();
     }
     let mut rows = String::new();
     for c in &checks {
-        let latest = state.store.latest_result(&c.name);
+        let latest = state.store.latest_result(&c.name).await;
         let status = match latest.as_ref().map(|r| r.ok) {
             Some(true) => "operational",
             Some(false) => "down",
@@ -105,8 +105,8 @@ fn render_checks(state: &AppState) -> String {
     rows
 }
 
-fn render_incidents(state: &AppState, now: i64) -> String {
-    let incidents = state.store.list_incidents();
+async fn render_incidents(state: &AppState, now: i64) -> String {
+    let incidents = state.store.list_incidents().await;
     if incidents.is_empty() {
         return r#"<div class="empty">No incidents posted yet.</div>"#.to_string();
     }

@@ -9,6 +9,7 @@ pub async fn run_all_once(state: &AppState) {
     let checks: Vec<_> = state
         .store
         .list_checks()
+        .await
         .into_iter()
         .filter(|c| c.enabled)
         .collect();
@@ -21,7 +22,8 @@ pub async fn run_all_once(state: &AppState) {
             let ts = now_secs();
             state
                 .store
-                .insert_result(&check.name, outcome.ok, outcome.latency_ms, ts);
+                .insert_result(&check.name, outcome.ok, outcome.latency_ms, ts)
+                .await;
             tracing::debug!(
                 check = check.name,
                 ok = outcome.ok,
@@ -39,9 +41,10 @@ pub async fn run_all_once(state: &AppState) {
 /// the process (spawned from `main`).
 pub async fn run_monitor(state: AppState) {
     let interval = state.config.check_interval;
+    let checks = state.store.count_checks().await;
     tracing::info!(
         interval_secs = interval.as_secs(),
-        checks = state.store.count_checks(),
+        checks,
         "Beacon monitor started"
     );
     loop {

@@ -100,17 +100,17 @@ pub fn component_status(latest_ok: Option<bool>, uptime_24h: f64) -> Status {
 
 /// Build the full [`StatusView`] from the store as of `now` (epoch seconds). Only enabled
 /// checks appear on the public surface.
-pub fn build_status(store: &dyn Store, now: i64) -> StatusView {
+pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
     let mut components = Vec::new();
     let mut overall = Status::Operational;
 
-    for check in store.list_checks().into_iter().filter(|c| c.enabled) {
-        let latest = store.latest_result(&check.name);
+    for check in store.list_checks().await.into_iter().filter(|c| c.enabled) {
+        let latest = store.latest_result(&check.name).await;
         let latest_ok = latest.as_ref().map(|r| r.ok);
 
-        let (t24, u24) = store.uptime_counts(&check.name, now - WINDOW_24H);
-        let (t7, u7) = store.uptime_counts(&check.name, now - WINDOW_7D);
-        let (t90, u90) = store.uptime_counts(&check.name, now - WINDOW_90D);
+        let (t24, u24) = store.uptime_counts(&check.name, now - WINDOW_24H).await;
+        let (t7, u7) = store.uptime_counts(&check.name, now - WINDOW_7D).await;
+        let (t90, u90) = store.uptime_counts(&check.name, now - WINDOW_90D).await;
 
         let uptime_24h = uptime_pct(t24, u24);
         let status = component_status(latest_ok, uptime_24h);
@@ -134,7 +134,7 @@ pub fn build_status(store: &dyn Store, now: i64) -> StatusView {
         overall: overall.as_str(),
         updated_at: now,
         components,
-        incidents: store.list_incidents(),
+        incidents: store.list_incidents().await,
     }
 }
 

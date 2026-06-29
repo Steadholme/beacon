@@ -19,14 +19,14 @@ const STATUS_HTML: &str = include_str!("../../templates/status.html");
 /// `GET /status` — the public status page (no auth).
 pub async fn status_page(State(state): State<AppState>) -> Html<String> {
     let now = now_secs();
-    let view = build_status(state.store.as_ref(), now);
+    let view = build_status(state.store.as_ref(), now).await;
     Html(render_status(&view, now))
 }
 
 /// `GET /api/status` — the public machine-readable status snapshot (no auth).
 pub async fn api_status(State(state): State<AppState>) -> Json<StatusView> {
     let now = now_secs();
-    Json(build_status(state.store.as_ref(), now))
+    Json(build_status(state.store.as_ref(), now).await)
 }
 
 fn render_status(view: &StatusView, now: i64) -> String {

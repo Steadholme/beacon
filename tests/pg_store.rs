@@ -9,8 +9,8 @@
 //!   cargo test --test pg_store -- --nocapture
 //! ```
 //!
-//! Requires a multi-threaded runtime: the synchronous `Store` trait bridges to async sqlx
-//! via `block_in_place`, which only works on the multi_thread scheduler.
+//! The `Store` trait is async: each method `.await`s sqlx natively (no `block_in_place`), so
+//! it runs on any Tokio scheduler — this test stays on `multi_thread` for parallel queries.
 
 use std::sync::Arc;
 
@@ -45,23 +45,23 @@ async fn pg_store_full_integration() {
         target: "https://id.w33d.xyz/healthz".to_string(),
         enabled: true,
     };
-    pg.insert_check(&check);
-    pg.insert_check(&check);
-    assert!(pg.count_checks() >= 1);
-    assert!(pg.list_checks().iter().any(|c| c.name == "PgGateway"));
+    pg.insert_check(&check).await;
+    pg.insert_check(&check).await;
+    assert!(pg.count_checks().await >= 1);
+    assert!(pg.list_checks().await.iter().any(|c| c.name == "PgGateway"));
 
     // Record results spanning ok/down and compute uptime.
     let now = now_secs();
-    pg.insert_result("PgGateway", true, 12, now - 30);
-    pg.insert_result("PgGateway", true, 12, now - 30); // dup (name,ts) -> no-op
-    pg.insert_result("PgGateway", false, 30, now - 20);
-    pg.insert_result("PgGateway", true, 15, now - 10);
+    pg.insert_result("PgGateway", true, 12, now - 30).await;
+    pg.insert_result("PgGateway", true, 12, now - 30).await; // dup (name,ts) -> no-op
+    pg.insert_result("PgGateway", false, 30, now - 20).await;
+    pg.insert_result("PgGateway", true, 15, now - 10).await;
 
-    let latest = pg.latest_result("PgGateway").expect("latest exists");
+    let latest = pg.latest_result("PgGateway").await.expect("latest exists");
     assert_eq!(latest.ts, now - 10);
     assert!(latest.ok);
 
-    let (total, up) = pg.uptime_counts("PgGateway", now - 86_400);
+    let (total, up) = pg.uptime_counts("PgGateway", now - 86_400).await;
     assert_eq!(total, 3, "dup (name,ts) not double-counted");
     assert_eq!(up, 2);
 
@@ -73,7 +73,8 @@ async fn pg_store_full_integration() {
         body: "b".to_string(),
         created_at: now - 100,
         updated_at: now - 100,
-    });
+    })
+    .await;
     pg.insert_incident(&beacon::store::Incident {
         id: "inc_b".to_string(),
         title: "newer".to_string(),
@@ -81,13 +82,14 @@ async fn pg_store_full_integration() {
         body: "b2".to_string(),
         created_at: now,
         updated_at: now,
-    });
-    let incidents = pg.list_incidents();
+    })
+    .await;
+    let incidents = pg.list_incidents().await;
     assert_eq!(incidents.len(), 2);
     assert_eq!(incidents[0].id, "inc_b", "newest first");
 
     // --- full HTTP flow through the PG-backed app --------------------------
-    let mut state: AppState = build_dev_state();
+    let mut state: AppState = build_dev_state().await;
     state.store = pg.clone();
 
     // Public status renders against Postgres-backed data.

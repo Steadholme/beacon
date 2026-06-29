@@ -87,16 +87,20 @@ async fn monitor_sweep_records_results() {
         target: format!("http://{addr}/"),
         enabled: true,
     }];
-    let state = state_with(config);
+    let state = state_with(config).await;
 
     // One sweep should record exactly one (ok) result for "Local".
     monitor::run_all_once(&state).await;
-    let latest = state.store.latest_result("Local").expect("a result was recorded");
+    let latest = state
+        .store
+        .latest_result("Local")
+        .await
+        .expect("a result was recorded");
     assert!(latest.ok, "local up server records ok");
     assert!(latest.latency_ms >= 0);
 
     // The status view rolls this up to Operational at 100% uptime.
-    let view = build_status(state.store.as_ref(), now_secs());
+    let view = build_status(state.store.as_ref(), now_secs()).await;
     assert_eq!(view.overall, "operational");
     let comp = view.components.iter().find(|c| c.name == "Local").unwrap();
     assert_eq!(comp.status, "operational");
@@ -123,17 +127,18 @@ async fn mixed_results_drive_degraded_status() {
             enabled: true,
         }];
         c
-    });
+    })
+    .await;
     let now = now_secs();
     // 99 ok + 2 down within the 24h window -> ~98.04% -> degraded (currently up).
     for i in 0..99 {
-        state.store.insert_result("Flappy", true, 10, now - 1000 + i);
+        state.store.insert_result("Flappy", true, 10, now - 1000 + i).await;
     }
-    state.store.insert_result("Flappy", false, 10, now - 50);
-    state.store.insert_result("Flappy", false, 10, now - 40);
-    state.store.insert_result("Flappy", true, 10, now); // currently up
+    state.store.insert_result("Flappy", false, 10, now - 50).await;
+    state.store.insert_result("Flappy", false, 10, now - 40).await;
+    state.store.insert_result("Flappy", true, 10, now).await; // currently up
 
-    let view = build_status(state.store.as_ref(), now);
+    let view = build_status(state.store.as_ref(), now).await;
     let comp = view.components.iter().find(|c| c.name == "Flappy").unwrap();
     assert_eq!(comp.status, "degraded", "recent flapping -> degraded");
     assert_eq!(view.overall, "degraded");

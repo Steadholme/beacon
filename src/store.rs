@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// A configured monitoring check (maps 1:1 to a `checks` row).
@@ -49,26 +50,29 @@ pub struct Incident {
     pub updated_at: i64,
 }
 
-/// Pluggable monitoring store. No `.await` is ever held across an internal lock.
+/// Pluggable monitoring store. Methods are `async`: the axum handlers and the background
+/// prober `.await` them directly on the serving runtime, so a DB round-trip never blocks a
+/// worker thread. The in-memory store never holds a lock across an `.await`.
+#[async_trait]
 pub trait Store: Send + Sync {
     /// Insert a check if its name is new (seed-safe; never clobbers operator edits).
-    fn insert_check(&self, check: &Check);
+    async fn insert_check(&self, check: &Check);
     /// All configured checks, ordered by name.
-    fn list_checks(&self) -> Vec<Check>;
+    async fn list_checks(&self) -> Vec<Check>;
     /// Number of configured checks (drives "seed only when empty").
-    fn count_checks(&self) -> usize;
+    async fn count_checks(&self) -> usize;
 
     /// Record a probe outcome (idempotent on `(name, ts)`).
-    fn insert_result(&self, name: &str, ok: bool, latency_ms: i64, ts: i64);
+    async fn insert_result(&self, name: &str, ok: bool, latency_ms: i64, ts: i64);
     /// The most recent result for a check, if any.
-    fn latest_result(&self, name: &str) -> Option<CheckResult>;
+    async fn latest_result(&self, name: &str) -> Option<CheckResult>;
     /// `(total, up)` result counts for a check at/after `since_ts` — the rolling-uptime input.
-    fn uptime_counts(&self, name: &str, since_ts: i64) -> (u64, u64);
+    async fn uptime_counts(&self, name: &str, since_ts: i64) -> (u64, u64);
 
     /// Store a manually posted incident.
-    fn insert_incident(&self, incident: &Incident);
+    async fn insert_incident(&self, incident: &Incident);
     /// All incidents, newest first.
-    fn list_incidents(&self) -> Vec<Incident>;
+    async fn list_incidents(&self) -> Vec<Incident>;
 }
 
 // --------------------------------------------------------------------------------------
@@ -88,8 +92,11 @@ impl InMemoryStore {
     }
 }
 
+#[async_trait]
 impl Store for InMemoryStore {
-    fn insert_check(&self, check: &Check) {
+    // The std `Mutex` is fine throughout: each critical section is fully synchronous (no
+    // `.await` inside), so a guard is never held across a yield point.
+    async fn insert_check(&self, check: &Check) {
         self.checks
             .lock()
             .expect("checks lock poisoned")
@@ -97,7 +104,7 @@ impl Store for InMemoryStore {
             .or_insert_with(|| check.clone());
     }
 
-    fn list_checks(&self) -> Vec<Check> {
+    async fn list_checks(&self) -> Vec<Check> {
         let mut v: Vec<Check> = self
             .checks
             .lock()
@@ -109,11 +116,11 @@ impl Store for InMemoryStore {
         v
     }
 
-    fn count_checks(&self) -> usize {
+    async fn count_checks(&self) -> usize {
         self.checks.lock().expect("checks lock poisoned").len()
     }
 
-    fn insert_result(&self, name: &str, ok: bool, latency_ms: i64, ts: i64) {
+    async fn insert_result(&self, name: &str, ok: bool, latency_ms: i64, ts: i64) {
         let mut results = self.results.lock().expect("results lock poisoned");
         // PRIMARY KEY(name, ts): a duplicate (name, ts) is a no-op, like ON CONFLICT DO NOTHING.
         if results.iter().any(|r| r.name == name && r.ts == ts) {
@@ -127,7 +134,7 @@ impl Store for InMemoryStore {
         });
     }
 
-    fn latest_result(&self, name: &str) -> Option<CheckResult> {
+    async fn latest_result(&self, name: &str) -> Option<CheckResult> {
         self.results
             .lock()
             .expect("results lock poisoned")
@@ -137,7 +144,7 @@ impl Store for InMemoryStore {
             .cloned()
     }
 
-    fn uptime_counts(&self, name: &str, since_ts: i64) -> (u64, u64) {
+    async fn uptime_counts(&self, name: &str, since_ts: i64) -> (u64, u64) {
         let results = self.results.lock().expect("results lock poisoned");
         let mut total = 0u64;
         let mut up = 0u64;
@@ -152,7 +159,7 @@ impl Store for InMemoryStore {
         (total, up)
     }
 
-    fn insert_incident(&self, incident: &Incident) {
+    async fn insert_incident(&self, incident: &Incident) {
         let mut incidents = self.incidents.lock().expect("incidents lock poisoned");
         if incidents.iter().any(|i| i.id == incident.id) {
             return;
@@ -160,13 +167,13 @@ impl Store for InMemoryStore {
         incidents.push(incident.clone());
     }
 
-    fn list_incidents(&self) -> Vec<Incident> {
+    async fn list_incidents(&self) -> Vec<Incident> {
         let mut v: Vec<Incident> = self
             .incidents
             .lock()
             .expect("incidents lock poisoned")
             .clone();
-        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v.sort_by_key(|b| std::cmp::Reverse(b.created_at));
         v
     }
 }
@@ -175,44 +182,34 @@ impl Store for InMemoryStore {
 // PostgreSQL-backed `Store` (portable: standard SQL, runtime queries, no macros).
 // --------------------------------------------------------------------------------------
 //
-// Selected at runtime by `BEACON_STORE=postgres`. The `Store` trait is synchronous (the
-// prober and handlers never `.await` the store), so each method bridges to async sqlx via
-// `block_in_place` + the runtime `Handle` — the same pattern keystone/keyward use. This
-// needs a multi-threaded Tokio runtime, which production (`#[tokio::main]`) and the
-// `multi_thread` integration test both provide.
+// Selected at runtime by `BEACON_STORE=postgres`. The `Store` trait is async, so each method
+// drives sqlx natively and the handlers + prober `.await` it on the serving runtime — there
+// is NO `block_in_place` and NO sync-over-async bridge, so a DB round-trip never blocks a
+// worker thread. Every write is a single idempotent `INSERT .. ON CONFLICT DO NOTHING`, so
+// no in-process serializer is needed (the DB enforces uniqueness); reads run fully concurrently.
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
-/// PostgreSQL-backed [`Store`]. Holds a `PgPool` plus the runtime [`Handle`] used to drive
-/// async queries to completion from the synchronous trait methods.
-///
-/// [`Handle`]: tokio::runtime::Handle
+/// PostgreSQL-backed [`Store`]. Holds just a `PgPool`; the async trait methods drive sqlx
+/// natively, so no worker thread is ever blocked on a DB round-trip.
 pub struct PgStore {
     pool: PgPool,
-    handle: tokio::runtime::Handle,
 }
 
 impl PgStore {
-    /// Open a pooled connection. Captures the current runtime handle for the sync→async
-    /// bridge; must be called from within a Tokio runtime.
+    /// Open a pooled connection. Async; call from within a Tokio runtime.
     pub async fn connect(database_url: &str) -> Result<Self, sqlx::Error> {
         let pool = PgPoolOptions::new()
             .max_connections(8)
             .connect(database_url)
             .await?;
-        Ok(Self {
-            pool,
-            handle: tokio::runtime::Handle::current(),
-        })
+        Ok(Self::from_pool(pool))
     }
 
     /// Construct from an existing pool (used by tests that share a pool).
     pub fn from_pool(pool: PgPool) -> Self {
-        Self {
-            pool,
-            handle: tokio::runtime::Handle::current(),
-        }
+        Self { pool }
     }
 
     /// Idempotent, portable migration. Standard SQL only — safe to run on every startup.
@@ -388,28 +385,26 @@ impl PgStore {
         Ok(out)
     }
 
-    /// Drive an async DB op to completion from a synchronous trait method.
-    fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
-        tokio::task::block_in_place(|| self.handle.block_on(fut))
-    }
 }
 
+#[async_trait]
 impl Store for PgStore {
-    fn insert_check(&self, check: &Check) {
-        if let Err(e) = self.block_on(self.insert_check_async(check)) {
+    async fn insert_check(&self, check: &Check) {
+        if let Err(e) = self.insert_check_async(check).await {
             tracing::error!(error = %e, "pg insert_check failed");
         }
     }
 
-    fn list_checks(&self) -> Vec<Check> {
-        self.block_on(self.list_checks_async()).unwrap_or_else(|e| {
+    async fn list_checks(&self) -> Vec<Check> {
+        self.list_checks_async().await.unwrap_or_else(|e| {
             tracing::error!(error = %e, "pg list_checks failed");
             Vec::new()
         })
     }
 
-    fn count_checks(&self) -> usize {
-        self.block_on(self.count_checks_async())
+    async fn count_checks(&self) -> usize {
+        self.count_checks_async()
+            .await
             .map(|n| n.max(0) as usize)
             .unwrap_or_else(|e| {
                 tracing::error!(error = %e, "pg count_checks failed");
@@ -417,22 +412,22 @@ impl Store for PgStore {
             })
     }
 
-    fn insert_result(&self, name: &str, ok: bool, latency_ms: i64, ts: i64) {
-        if let Err(e) = self.block_on(self.insert_result_async(name, ok, latency_ms, ts)) {
+    async fn insert_result(&self, name: &str, ok: bool, latency_ms: i64, ts: i64) {
+        if let Err(e) = self.insert_result_async(name, ok, latency_ms, ts).await {
             tracing::error!(error = %e, "pg insert_result failed");
         }
     }
 
-    fn latest_result(&self, name: &str) -> Option<CheckResult> {
-        self.block_on(self.latest_result_async(name))
-            .unwrap_or_else(|e| {
-                tracing::error!(error = %e, "pg latest_result failed");
-                None
-            })
+    async fn latest_result(&self, name: &str) -> Option<CheckResult> {
+        self.latest_result_async(name).await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pg latest_result failed");
+            None
+        })
     }
 
-    fn uptime_counts(&self, name: &str, since_ts: i64) -> (u64, u64) {
-        self.block_on(self.uptime_counts_async(name, since_ts))
+    async fn uptime_counts(&self, name: &str, since_ts: i64) -> (u64, u64) {
+        self.uptime_counts_async(name, since_ts)
+            .await
             .map(|(t, u)| (t.max(0) as u64, u.max(0) as u64))
             .unwrap_or_else(|e| {
                 tracing::error!(error = %e, "pg uptime_counts failed");
@@ -440,17 +435,16 @@ impl Store for PgStore {
             })
     }
 
-    fn insert_incident(&self, incident: &Incident) {
-        if let Err(e) = self.block_on(self.insert_incident_async(incident)) {
+    async fn insert_incident(&self, incident: &Incident) {
+        if let Err(e) = self.insert_incident_async(incident).await {
             tracing::error!(error = %e, "pg insert_incident failed");
         }
     }
 
-    fn list_incidents(&self) -> Vec<Incident> {
-        self.block_on(self.list_incidents_async())
-            .unwrap_or_else(|e| {
-                tracing::error!(error = %e, "pg list_incidents failed");
-                Vec::new()
-            })
+    async fn list_incidents(&self) -> Vec<Incident> {
+        self.list_incidents_async().await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pg list_incidents failed");
+            Vec::new()
+        })
     }
 }

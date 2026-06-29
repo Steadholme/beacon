@@ -58,9 +58,9 @@ pub fn app(state: AppState) -> Router {
 /// Build dev state from an explicit [`Config`]: an empty [`InMemoryStore`] seeded with the
 /// config's checks. Used by `main`'s memory mode and the integration tests, so they need no
 /// database.
-pub fn state_with(config: Config) -> AppState {
+pub async fn state_with(config: Config) -> AppState {
     let store = Arc::new(InMemoryStore::new());
-    seed_if_empty(store.as_ref(), &config.seed);
+    seed_if_empty(store.as_ref(), &config.seed).await;
     AppState {
         config: Arc::new(config),
         store,
@@ -68,8 +68,8 @@ pub fn state_with(config: Config) -> AppState {
 }
 
 /// Convenience: dev state with the default [`Config`] (default component seed).
-pub fn build_dev_state() -> AppState {
-    state_with(Config::dev())
+pub async fn build_dev_state() -> AppState {
+    state_with(Config::dev()).await
 }
 
 /// Build runtime state from the environment.
@@ -102,7 +102,7 @@ pub async fn build_state_from_env() -> Result<AppState, String> {
         other => return Err(format!("unknown BEACON_STORE={other} (use memory|postgres)")),
     };
 
-    seed_if_empty(store.as_ref(), &config.seed);
+    seed_if_empty(store.as_ref(), &config.seed).await;
 
     Ok(AppState {
         config: Arc::new(config),
@@ -111,12 +111,12 @@ pub async fn build_state_from_env() -> Result<AppState, String> {
 }
 
 /// Seed the checks table from `seed` only when it is currently empty.
-pub fn seed_if_empty(store: &dyn Store, seed: &[Check]) {
-    if store.count_checks() > 0 {
+pub async fn seed_if_empty(store: &dyn Store, seed: &[Check]) {
+    if store.count_checks().await > 0 {
         return;
     }
     for check in seed {
-        store.insert_check(check);
+        store.insert_check(check).await;
     }
     if !seed.is_empty() {
         tracing::info!(count = seed.len(), "seeded checks from config");

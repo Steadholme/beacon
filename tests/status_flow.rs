@@ -30,7 +30,7 @@ fn text(bytes: &[u8]) -> String {
 
 #[tokio::test]
 async fn healthz_ok() {
-    let state = build_dev_state();
+    let state = build_dev_state().await;
     let (status, body) = call(&state, get("/healthz")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(&body, b"ok");
@@ -38,7 +38,7 @@ async fn healthz_ok() {
 
 #[tokio::test]
 async fn public_status_renders_without_auth() {
-    let state = build_dev_state();
+    let state = build_dev_state().await;
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK, "public status page is open");
     let html = text(&body);
@@ -56,7 +56,7 @@ async fn public_status_renders_without_auth() {
 
 #[tokio::test]
 async fn api_status_json_shape() {
-    let state = build_dev_state();
+    let state = build_dev_state().await;
     let (status, body) = call(&state, get("/api/status")).await;
     assert_eq!(status, StatusCode::OK);
     let v: Value = serde_json::from_slice(&body).unwrap();
@@ -86,7 +86,7 @@ fn post_incident(headers: &[(&str, &str)], form: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn admin_post_requires_gateway_identity() {
-    let state = build_dev_state();
+    let state = build_dev_state().await;
     // No X-Auth-* headers -> 401.
     let (status, _) = call(
         &state,
@@ -98,7 +98,7 @@ async fn admin_post_requires_gateway_identity() {
 
 #[tokio::test]
 async fn incident_create_shows_on_public_status() {
-    let state = build_dev_state();
+    let state = build_dev_state().await;
 
     // Operator (gateway-injected identity) posts an incident.
     let (status, _) = call(
@@ -134,7 +134,7 @@ async fn incident_create_shows_on_public_status() {
 
 #[tokio::test]
 async fn admin_page_renders_with_email() {
-    let state = build_dev_state();
+    let state = build_dev_state().await;
     let req = Request::builder()
         .uri("/admin")
         .header("x-auth-email", "ops@holdfast.local")
@@ -151,7 +151,7 @@ async fn admin_page_renders_with_email() {
 
 #[tokio::test]
 async fn empty_incident_title_rejected() {
-    let state = build_dev_state();
+    let state = build_dev_state().await;
     let (status, _) = call(
         &state,
         post_incident(
