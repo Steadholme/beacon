@@ -51,7 +51,7 @@ async fn public_status_renders_without_auth() {
     // No data yet -> nominal banner.
     assert!(html.contains("All systems operational"));
     // Inlined CSS (embedded design system).
-    assert!(html.contains("--accent: #4F46E5"), "design tokens inlined");
+    assert!(html.contains("--accent: #546be7"), "design tokens inlined");
 }
 
 #[tokio::test]
