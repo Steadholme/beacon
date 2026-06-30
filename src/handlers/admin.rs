@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use crate::auth;
 use crate::error::AppError;
-use crate::handlers::{esc, status_pill, APP_CSS, SHIELD_SVG};
+use crate::handlers::{esc, status_pill, userbox, APP_CSS, SHIELD_SVG};
 use crate::store::Incident;
 use crate::{now_nanos, now_secs, AppState};
 
@@ -74,6 +74,7 @@ async fn render_admin(state: &AppState, email: &str, now: i64) -> String {
     ADMIN_HTML
         .replace("{{CSS}}", APP_CSS)
         .replace("{{SHIELD}}", SHIELD_SVG)
+        .replace("{{USERBOX}}", &userbox("Beacon admin", Some(email)))
         .replace("{{EMAIL}}", &esc(email))
         .replace("{{CHECKS}}", &render_checks(state).await)
         .replace("{{INCIDENTS}}", &render_incidents(state, now).await)

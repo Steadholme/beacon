@@ -42,6 +42,11 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
         // --- public status surface ---
+        // The subdomain-per-service map fronts Beacon at status.w33d.xyz (auth=public) and
+        // forwards the path UNMODIFIED, so the host ROOT must render the PUBLIC status page
+        // (the admin dashboard stays the fallback for stray paths; its writes still require a
+        // gateway-injected identity that Sluice strips on public routes).
+        .route("/", get(handlers::status::status_page))
         .route("/status", get(handlers::status::status_page))
         .route("/api/status", get(handlers::status::api_status))
         // --- admin (gateway auth=sso; reads injected X-Auth-* identity) ---

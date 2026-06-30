@@ -9,7 +9,7 @@ use axum::response::Html;
 use axum::Json;
 
 use crate::handlers::{
-    esc, fmt_latency, overall_banner, rel_time, status_pill, APP_CSS, SHIELD_SVG,
+    esc, fmt_latency, overall_banner, rel_time, status_pill, userbox, APP_CSS, SHIELD_SVG,
 };
 use crate::model::{build_status, StatusView};
 use crate::{now_secs, AppState};
@@ -33,6 +33,7 @@ fn render_status(view: &StatusView, now: i64) -> String {
     STATUS_HTML
         .replace("{{CSS}}", APP_CSS)
         .replace("{{SHIELD}}", SHIELD_SVG)
+        .replace("{{USERBOX}}", &userbox("System Status", None))
         .replace("{{BANNER}}", &overall_banner(view.overall))
         .replace("{{COMPONENTS}}", &render_components(view, now))
         .replace("{{INCIDENTS}}", &render_incidents(view, now))

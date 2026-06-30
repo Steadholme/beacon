@@ -17,6 +17,48 @@ pub const APP_CSS: &str = include_str!("../../static/app.css");
 /// The HOLDFAST shield glyph (small, for the app-bar brand lockup).
 pub const SHIELD_SVG: &str = r##"<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="hf-shield-sm" x1="8" y1="4" x2="40" y2="44" gradientUnits="userSpaceOnUse"><stop stop-color="#818CF8"/><stop offset="1" stop-color="#4F46E5"/></linearGradient></defs><path d="M24 4 8 9.5V22c0 11 7 17.4 16 21.5C33 39.4 40 33 40 22V9.5L24 4Z" fill="url(#hf-shield-sm)"/><rect x="20" y="19" width="8" height="13" rx="1" fill="#fff" fill-opacity="0.92"/><path d="M20 19v-2.5a4 4 0 0 1 8 0V19" stroke="#fff" stroke-width="2" stroke-opacity="0.92" fill="none"/></svg>"##;
 
+/// Cross-subdomain SSO logout (terminated at the gateway). The same path Beacon has always used.
+pub const LOGOUT_URL: &str = "/_gw/auth/logout";
+
+/// The right side of the app-bar: a page title, an "All apps" pill back to the apex portal, and —
+/// when a gateway identity is known — a user chip (avatar initial + email) and the SSO logout.
+/// Shared by every page so the chrome stays identical; public pages pass `None` for `email`
+/// (no chip, no logout — just the title + "All apps" link).
+pub fn userbox(title: &str, email: Option<&str>) -> String {
+    let chip = match email {
+        Some(e) if !e.is_empty() => {
+            let initial = e
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_else(|| "H".to_string());
+            format!(
+                concat!(
+                    "<span class=\"userchip\"><span class=\"userchip__avatar\" aria-hidden=\"true\">{initial}</span>",
+                    "<span class=\"user-email\">{email}</span></span>",
+                    "<a class=\"btn btn-ghost btn-sm\" href=\"{logout}\">Log out</a>",
+                ),
+                initial = esc(&initial),
+                email = esc(e),
+                logout = LOGOUT_URL,
+            )
+        }
+        _ => String::new(),
+    };
+    format!(
+        concat!(
+            "<span class=\"topbar__title\">{title}</span>",
+            "<a class=\"allapps\" href=\"https://w33d.xyz\" title=\"All apps\">",
+            "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">",
+            "<rect x=\"3\" y=\"3\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"7\" rx=\"1.5\"/>",
+            "<rect x=\"3\" y=\"14\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"14\" y=\"14\" width=\"7\" height=\"7\" rx=\"1.5\"/></svg>All apps</a>",
+            "{chip}",
+        ),
+        title = esc(title),
+        chip = chip,
+    )
+}
+
 /// Minimal HTML escaping for text/attribute interpolation.
 pub fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
