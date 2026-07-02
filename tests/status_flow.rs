@@ -433,6 +433,11 @@ async fn admin_page_renders_with_email() {
     assert!(html.contains("/_gw/auth/logout"), "logout link present");
     assert!(html.contains("Post an incident"));
     assert!(html.contains("Schedule maintenance"));
+    // New admin surfaces: incident templates, component groups, and the subscribers panel.
+    assert!(html.contains(r#"data-tpl="#), "insert-template buttons present");
+    assert!(html.contains("Component groups"), "group management card");
+    assert!(html.contains(r#"action="/admin/groups""#), "create-group form");
+    assert!(html.contains("Status subscribers"), "subscribers panel");
     assert!(html.contains(r#"name="csrf_token""#), "forms embed the CSRF token");
     // The rendered token matches the minted cookie (double-submit pair).
     let token = set_cookie

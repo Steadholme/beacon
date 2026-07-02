@@ -73,6 +73,7 @@
             </div>
             <div class="field">
               <label for="body">Details</label>
+              {{TEMPLATES_CREATE}}
               <textarea id="body" name="body" placeholder="What is happening and what is being done."></textarea>
             </div>
             <button class="btn btn-primary" type="submit">Publish incident</button>
@@ -123,7 +124,33 @@
           {{MAINTENANCES}}
         </div>
       </section>
+
+      <section class="card">
+        <div class="card__head"><h2>Component groups</h2></div>
+        <div class="card__body">
+          {{GROUPS}}
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card__head"><h2>Status subscribers</h2></div>
+        <div class="card__body">
+          {{SUBSCRIBERS}}
+        </div>
+      </section>
     </div>
   </main>
+  <script>
+    // Insert-template: copy a button's static boilerplate (data-tpl) into the enclosing
+    // form's textarea via .value (never innerHTML). One delegated listener covers every form.
+    document.addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-tpl]');
+      if (!btn) return;
+      var form = btn.closest('form');
+      if (!form) return;
+      var ta = form.querySelector('textarea');
+      if (ta) { ta.value = btn.getAttribute('data-tpl'); ta.focus(); }
+    });
+  </script>
 </body>
 </html>

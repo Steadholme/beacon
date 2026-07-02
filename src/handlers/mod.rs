@@ -11,6 +11,7 @@ pub mod admin;
 pub mod feed;
 pub mod health;
 pub mod status;
+pub mod subscriptions;
 
 /// Embedded design system, inlined into each rendered page's `<style>`.
 pub const APP_CSS: &str = include_str!("../../static/app.css");
@@ -190,6 +191,55 @@ pub fn fmt_latency(latency_ms: Option<i64>) -> String {
         Some(ms) => format!("{ms} ms"),
         None => "—".to_string(),
     }
+}
+
+/// Compact human countdown for a future event `secs_until` seconds away: `"2d 3h"`,
+/// `"3h 15m"`, `"15m"`, or `"under a minute"`. Non-positive inputs read as `"now"`.
+pub fn fmt_countdown(secs_until: i64) -> String {
+    if secs_until <= 0 {
+        return "now".to_string();
+    }
+    let days = secs_until / 86_400;
+    let hours = (secs_until % 86_400) / 3_600;
+    let mins = (secs_until % 3_600) / 60;
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {mins}m")
+    } else if mins > 0 {
+        format!("{mins}m")
+    } else {
+        "under a minute".to_string()
+    }
+}
+
+/// Wrap `inner` HTML in the standard HOLDFAST chrome (top-bar + centered console + footer),
+/// inlining the embedded design system. Used by the standalone public subscription notices;
+/// `title` is the page `<title>` + top-bar title (already trusted/static text).
+pub fn page_shell(title: &str, inner: &str) -> String {
+    format!(
+        concat!(
+            "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n",
+            "<meta charset=\"utf-8\">\n",
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
+            "<meta name=\"color-scheme\" content=\"light\">\n",
+            "<title>{title} · HOLDFAST</title>\n<style>{css}</style>\n</head>\n",
+            "<body class=\"page-console\">\n",
+            "<header class=\"topbar\"><div class=\"topbar__inner\">",
+            "<a class=\"brand\" href=\"/status\" aria-label=\"HOLDFAST status home\">",
+            "<span class=\"brand__glyph\" aria-hidden=\"true\">{shield}</span>",
+            "<span class=\"brand__word\">HOLDFAST</span></a>",
+            "<div class=\"topbar__right\">{userbox}</div></div></header>\n",
+            "<main class=\"console\">{inner}</main>\n",
+            "<footer class=\"site-foot\"><span>HOLDFAST · Sovereign infrastructure</span></footer>\n",
+            "</body>\n</html>\n",
+        ),
+        title = esc(title),
+        css = APP_CSS,
+        shield = SHIELD_SVG,
+        userbox = userbox("System Status", None),
+        inner = inner,
+    )
 }
 
 /// Human calendar date in UTC, e.g. `Jul 2, 2026`. Falls back to the raw integer on an

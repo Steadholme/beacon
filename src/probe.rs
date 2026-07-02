@@ -110,8 +110,9 @@ fn parse_status_line(buf: &[u8]) -> std::io::Result<u16> {
 }
 
 /// Parse `http(s)://host[:port]/path` into `(tls, host, port, path)`. Minimal by design —
-/// the targets are operator-controlled service URLs, not arbitrary user input.
-fn parse_http_url(url: &str) -> Option<(bool, String, u16, String)> {
+/// the targets are operator-controlled service URLs, not arbitrary user input. Shared with
+/// [`crate::notify`] for outbound webhook delivery.
+pub(crate) fn parse_http_url(url: &str) -> Option<(bool, String, u16, String)> {
     let (tls, rest) = if let Some(r) = url.strip_prefix("https://") {
         (true, r)
     } else if let Some(r) = url.strip_prefix("http://") {
@@ -139,8 +140,9 @@ fn parse_http_url(url: &str) -> Option<(bool, String, u16, String)> {
     Some((tls, host, port, path))
 }
 
-/// Process-wide rustls client connector (ring provider + Mozilla roots), built once.
-fn tls_connector() -> TlsConnector {
+/// Process-wide rustls client connector (ring provider + Mozilla roots), built once. Shared
+/// with [`crate::notify`] for outbound HTTPS webhook delivery.
+pub(crate) fn tls_connector() -> TlsConnector {
     static CONNECTOR: OnceLock<TlsConnector> = OnceLock::new();
     CONNECTOR
         .get_or_init(|| {

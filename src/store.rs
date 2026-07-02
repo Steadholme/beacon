@@ -15,6 +15,8 @@
 //!    body TEXT, created_at BIGINT, updated_at BIGINT, resolved_at BIGINT)`
 //! - `incident_updates(id TEXT PK, incident_id TEXT, status TEXT, body TEXT, created_at BIGINT)`
 //! - `maintenances(id TEXT PK, title TEXT, body TEXT, starts_at BIGINT, ends_at BIGINT, affected TEXT)`
+//! - `component_groups(id TEXT PK, name TEXT, position BIGINT)` + nullable `checks.group_id`
+//! - `subscribers(id TEXT PK, kind TEXT, target TEXT, secret TEXT, confirmed BOOLEAN, created_at BIGINT)`
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -31,6 +33,11 @@ pub struct Check {
     /// `http(s)://host[:port]/path` for http, or `host:port` for tcp.
     pub target: String,
     pub enabled: bool,
+    /// Optional [`ComponentGroup`] id this component sits in (`None` = ungrouped). Backed by
+    /// the nullable `checks.group_id` column added by an idempotent ALTER, so old rows and
+    /// the default seed read back as `None`.
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 /// One recorded probe outcome (maps 1:1 to a `check_results` row).
@@ -96,6 +103,45 @@ pub struct DailyUptime {
     pub up: i64,
 }
 
+/// One `(component, time-bucket)` latency aggregate over `check_results` — the response-time
+/// sparkline input. `bucket` is `ts / bucket_secs` (integer division); the average is
+/// `sum_latency_ms / count` computed in Rust (mirroring the `SUM(...)` uptime aggregate, so
+/// the SQL stays the most portable form — no `AVG`, FusionDB-safe over pgwire).
+#[derive(Clone, Debug)]
+pub struct LatencyPoint {
+    pub name: String,
+    pub bucket: i64,
+    pub sum_latency_ms: i64,
+    pub count: i64,
+}
+
+/// A section grouping components on the public page (maps 1:1 to a `component_groups` row).
+/// `position` orders the sections (ascending); ties break by name.
+#[derive(Clone, Debug, Serialize)]
+pub struct ComponentGroup {
+    pub id: String,
+    pub name: String,
+    pub position: i64,
+}
+
+/// A public status-update subscriber (maps 1:1 to a `subscribers` row). `kind` is currently
+/// always `"webhook"` (Beacon has no outbound mail path). `secret` is the per-subscriber
+/// HMAC-SHA256 signing key shared with the endpoint owner; `id` doubles as the unguessable
+/// confirm/unsubscribe capability token (random hex, so it is safe to place in a link).
+#[derive(Clone, Debug, Serialize)]
+pub struct Subscriber {
+    pub id: String,
+    /// Delivery channel — `"webhook"`.
+    pub kind: String,
+    /// Delivery target (a webhook URL).
+    pub target: String,
+    /// Per-subscriber HMAC-SHA256 signing key (hex).
+    pub secret: String,
+    /// Whether the subscription has been confirmed (double opt-in).
+    pub confirmed: bool,
+    pub created_at: i64,
+}
+
 /// Pluggable monitoring store. Methods are `async`: the axum handlers and the background
 /// prober `.await` them directly on the serving runtime, so a DB round-trip never blocks a
 /// worker thread. The in-memory store never holds a lock across an `.await`.
@@ -138,6 +184,34 @@ pub trait Store: Send + Sync {
     /// `(name, day, total, up)` aggregates over `check_results` at/after `since_ts`, for
     /// EVERY component in ONE query (`GROUP BY name, ts / 86400`) — the 90-day bar input.
     async fn daily_uptime(&self, since_ts: i64) -> Vec<DailyUptime>;
+
+    /// `(name, bucket, sum_latency_ms, count)` latency aggregates over `check_results` at/after
+    /// `since_ts`, for EVERY component in ONE query (`GROUP BY name, ts / bucket_secs`) — the
+    /// response-time sparkline input. `bucket_secs` is the sparkline bucket width (e.g. 3600).
+    async fn latency_series(&self, since_ts: i64, bucket_secs: i64) -> Vec<LatencyPoint>;
+
+    // --- component groups ---------------------------------------------------
+
+    /// Create a component group if its id is new (idempotent on `id`).
+    async fn insert_component_group(&self, group: &ComponentGroup);
+    /// All component groups, ordered by `position` then `name`.
+    async fn list_component_groups(&self) -> Vec<ComponentGroup>;
+    /// Assign a check to a group (`Some(id)`) or clear its group (`None`). No-op for an
+    /// unknown check name.
+    async fn set_check_group(&self, name: &str, group_id: Option<&str>);
+
+    // --- public subscribers -------------------------------------------------
+
+    /// Store a subscriber (idempotent on `id`).
+    async fn insert_subscriber(&self, subscriber: &Subscriber);
+    /// One subscriber by id (the confirm/unsubscribe token), if it exists.
+    async fn get_subscriber(&self, id: &str) -> Option<Subscriber>;
+    /// Mark a subscriber confirmed. No-op for an unknown id.
+    async fn confirm_subscriber(&self, id: &str);
+    /// Remove a subscriber (unsubscribe). No-op for an unknown id.
+    async fn delete_subscriber(&self, id: &str);
+    /// All subscribers, newest first (admin visibility + fan-out source).
+    async fn list_subscribers(&self) -> Vec<Subscriber>;
 }
 
 // --------------------------------------------------------------------------------------
@@ -151,6 +225,8 @@ pub struct InMemoryStore {
     incidents: Mutex<Vec<Incident>>,
     incident_updates: Mutex<Vec<IncidentUpdate>>,
     maintenances: Mutex<Vec<Maintenance>>,
+    component_groups: Mutex<Vec<ComponentGroup>>,
+    subscribers: Mutex<Vec<Subscriber>>,
 }
 
 impl InMemoryStore {
@@ -325,6 +401,97 @@ impl Store for InMemoryStore {
         v.sort_by(|a, b| a.name.cmp(&b.name).then(a.day.cmp(&b.day)));
         v
     }
+
+    async fn latency_series(&self, since_ts: i64, bucket_secs: i64) -> Vec<LatencyPoint> {
+        // Same aggregate the SQL runs: GROUP BY (name, ts / bucket_secs) over ts >= since,
+        // summing latency + counting so the average is derived identically in both stores.
+        let width = bucket_secs.max(1);
+        let mut buckets: HashMap<(String, i64), (i64, i64)> = HashMap::new();
+        for r in self.results.lock().expect("results lock poisoned").iter() {
+            if r.ts >= since_ts {
+                let entry = buckets.entry((r.name.clone(), r.ts / width)).or_insert((0, 0));
+                entry.0 += r.latency_ms;
+                entry.1 += 1;
+            }
+        }
+        let mut v: Vec<LatencyPoint> = buckets
+            .into_iter()
+            .map(|((name, bucket), (sum_latency_ms, count))| LatencyPoint {
+                name,
+                bucket,
+                sum_latency_ms,
+                count,
+            })
+            .collect();
+        v.sort_by(|a, b| a.name.cmp(&b.name).then(a.bucket.cmp(&b.bucket)));
+        v
+    }
+
+    async fn insert_component_group(&self, group: &ComponentGroup) {
+        let mut groups = self.component_groups.lock().expect("component_groups lock poisoned");
+        if groups.iter().any(|g| g.id == group.id) {
+            return;
+        }
+        groups.push(group.clone());
+    }
+
+    async fn list_component_groups(&self) -> Vec<ComponentGroup> {
+        let mut v: Vec<ComponentGroup> = self
+            .component_groups
+            .lock()
+            .expect("component_groups lock poisoned")
+            .clone();
+        v.sort_by(|a, b| a.position.cmp(&b.position).then(a.name.cmp(&b.name)));
+        v
+    }
+
+    async fn set_check_group(&self, name: &str, group_id: Option<&str>) {
+        let mut checks = self.checks.lock().expect("checks lock poisoned");
+        if let Some(c) = checks.get_mut(name) {
+            c.group_id = group_id.map(str::to_string);
+        }
+    }
+
+    async fn insert_subscriber(&self, subscriber: &Subscriber) {
+        let mut subs = self.subscribers.lock().expect("subscribers lock poisoned");
+        if subs.iter().any(|s| s.id == subscriber.id) {
+            return;
+        }
+        subs.push(subscriber.clone());
+    }
+
+    async fn get_subscriber(&self, id: &str) -> Option<Subscriber> {
+        self.subscribers
+            .lock()
+            .expect("subscribers lock poisoned")
+            .iter()
+            .find(|s| s.id == id)
+            .cloned()
+    }
+
+    async fn confirm_subscriber(&self, id: &str) {
+        let mut subs = self.subscribers.lock().expect("subscribers lock poisoned");
+        if let Some(s) = subs.iter_mut().find(|s| s.id == id) {
+            s.confirmed = true;
+        }
+    }
+
+    async fn delete_subscriber(&self, id: &str) {
+        self.subscribers
+            .lock()
+            .expect("subscribers lock poisoned")
+            .retain(|s| s.id != id);
+    }
+
+    async fn list_subscribers(&self) -> Vec<Subscriber> {
+        let mut v: Vec<Subscriber> = self
+            .subscribers
+            .lock()
+            .expect("subscribers lock poisoned")
+            .clone();
+        v.sort_by_key(|s| std::cmp::Reverse(s.created_at));
+        v
+    }
 }
 
 // --------------------------------------------------------------------------------------
@@ -432,27 +599,58 @@ impl PgStore {
         )
         .execute(&self.pool)
         .await?;
+        // Component groups: public-page sections with a rolled-up status pill. The nullable
+        // `checks.group_id` join column is added by an idempotent ALTER so existing rows and
+        // the default seed read back as NULL (ungrouped) — byte-identical when unused.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS component_groups (\
+                 id TEXT PRIMARY KEY, \
+                 name TEXT NOT NULL, \
+                 position BIGINT NOT NULL DEFAULT 0\
+             )",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query("ALTER TABLE checks ADD COLUMN IF NOT EXISTS group_id TEXT")
+            .execute(&self.pool)
+            .await?;
+        // Public status-update subscribers (webhook). `confirmed` gates the fan-out; `secret`
+        // is the per-subscriber HMAC signing key; `id` is the confirm/unsubscribe token.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS subscribers (\
+                 id TEXT PRIMARY KEY, \
+                 kind TEXT NOT NULL, \
+                 target TEXT NOT NULL, \
+                 secret TEXT NOT NULL, \
+                 confirmed BOOLEAN NOT NULL DEFAULT FALSE, \
+                 created_at BIGINT NOT NULL\
+             )",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     async fn insert_check_async(&self, c: &Check) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO checks (name, kind, target, enabled) VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (name) DO NOTHING",
+            "INSERT INTO checks (name, kind, target, enabled, group_id) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (name) DO NOTHING",
         )
         .bind(&c.name)
         .bind(&c.kind)
         .bind(&c.target)
         .bind(c.enabled)
+        .bind(&c.group_id)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     async fn list_checks_async(&self) -> Result<Vec<Check>, sqlx::Error> {
-        let rows = sqlx::query("SELECT name, kind, target, enabled FROM checks ORDER BY name")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query("SELECT name, kind, target, enabled, group_id FROM checks ORDER BY name")
+                .fetch_all(&self.pool)
+                .await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
             out.push(Check {
@@ -460,6 +658,7 @@ impl PgStore {
                 kind: row.try_get("kind")?,
                 target: row.try_get("target")?,
                 enabled: row.try_get("enabled")?,
+                group_id: row.try_get("group_id")?,
             });
         }
         Ok(out)
@@ -704,6 +903,147 @@ impl PgStore {
         }
         Ok(out)
     }
+
+    async fn latency_series_async(
+        &self,
+        since_ts: i64,
+        bucket_secs: i64,
+    ) -> Result<Vec<LatencyPoint>, sqlx::Error> {
+        // ONE aggregate for the whole sparkline grid: integer division buckets each result by
+        // time; SUM(latency_ms) + COUNT(*) keep the average derivation in Rust (no AVG), the
+        // most portable SQL form (FusionDB-safe over pgwire). bucket_secs is bound as a param.
+        let width = bucket_secs.max(1);
+        let rows = sqlx::query(
+            "SELECT name, ts / $2 AS bucket, \
+                    COALESCE(SUM(latency_ms), 0) AS sum_latency, COUNT(*) AS n \
+             FROM check_results WHERE ts >= $1 \
+             GROUP BY name, ts / $2 ORDER BY name, bucket",
+        )
+        .bind(since_ts)
+        .bind(width)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            out.push(LatencyPoint {
+                name: row.try_get("name")?,
+                bucket: row.try_get("bucket")?,
+                sum_latency_ms: row.try_get("sum_latency")?,
+                count: row.try_get("n")?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn insert_component_group_async(&self, g: &ComponentGroup) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO component_groups (id, name, position) VALUES ($1, $2, $3) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(&g.id)
+        .bind(&g.name)
+        .bind(g.position)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_component_groups_async(&self) -> Result<Vec<ComponentGroup>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, name, position FROM component_groups ORDER BY position, name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            out.push(ComponentGroup {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                position: row.try_get("position")?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn set_check_group_async(
+        &self,
+        name: &str,
+        group_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE checks SET group_id = $2 WHERE name = $1")
+            .bind(name)
+            .bind(group_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    fn subscriber_from_row(row: &sqlx::postgres::PgRow) -> Result<Subscriber, sqlx::Error> {
+        Ok(Subscriber {
+            id: row.try_get("id")?,
+            kind: row.try_get("kind")?,
+            target: row.try_get("target")?,
+            secret: row.try_get("secret")?,
+            confirmed: row.try_get("confirmed")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+
+    async fn insert_subscriber_async(&self, s: &Subscriber) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO subscribers (id, kind, target, secret, confirmed, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(&s.id)
+        .bind(&s.kind)
+        .bind(&s.target)
+        .bind(&s.secret)
+        .bind(s.confirmed)
+        .bind(s.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_subscriber_async(&self, id: &str) -> Result<Option<Subscriber>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, kind, target, secret, confirmed, created_at FROM subscribers WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(Self::subscriber_from_row).transpose()
+    }
+
+    async fn confirm_subscriber_async(&self, id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE subscribers SET confirmed = TRUE WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_subscriber_async(&self, id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM subscribers WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_subscribers_async(&self) -> Result<Vec<Subscriber>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, kind, target, secret, confirmed, created_at FROM subscribers \
+             ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            out.push(Self::subscriber_from_row(row)?);
+        }
+        Ok(out)
+    }
 }
 
 #[async_trait]
@@ -812,6 +1152,66 @@ impl Store for PgStore {
     async fn daily_uptime(&self, since_ts: i64) -> Vec<DailyUptime> {
         self.daily_uptime_async(since_ts).await.unwrap_or_else(|e| {
             tracing::error!(error = %e, "pg daily_uptime failed");
+            Vec::new()
+        })
+    }
+
+    async fn latency_series(&self, since_ts: i64, bucket_secs: i64) -> Vec<LatencyPoint> {
+        self.latency_series_async(since_ts, bucket_secs)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, "pg latency_series failed");
+                Vec::new()
+            })
+    }
+
+    async fn insert_component_group(&self, group: &ComponentGroup) {
+        if let Err(e) = self.insert_component_group_async(group).await {
+            tracing::error!(error = %e, "pg insert_component_group failed");
+        }
+    }
+
+    async fn list_component_groups(&self) -> Vec<ComponentGroup> {
+        self.list_component_groups_async().await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pg list_component_groups failed");
+            Vec::new()
+        })
+    }
+
+    async fn set_check_group(&self, name: &str, group_id: Option<&str>) {
+        if let Err(e) = self.set_check_group_async(name, group_id).await {
+            tracing::error!(error = %e, "pg set_check_group failed");
+        }
+    }
+
+    async fn insert_subscriber(&self, subscriber: &Subscriber) {
+        if let Err(e) = self.insert_subscriber_async(subscriber).await {
+            tracing::error!(error = %e, "pg insert_subscriber failed");
+        }
+    }
+
+    async fn get_subscriber(&self, id: &str) -> Option<Subscriber> {
+        self.get_subscriber_async(id).await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pg get_subscriber failed");
+            None
+        })
+    }
+
+    async fn confirm_subscriber(&self, id: &str) {
+        if let Err(e) = self.confirm_subscriber_async(id).await {
+            tracing::error!(error = %e, "pg confirm_subscriber failed");
+        }
+    }
+
+    async fn delete_subscriber(&self, id: &str) {
+        if let Err(e) = self.delete_subscriber_async(id).await {
+            tracing::error!(error = %e, "pg delete_subscriber failed");
+        }
+    }
+
+    async fn list_subscribers(&self) -> Vec<Subscriber> {
+        self.list_subscribers_async().await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pg list_subscribers failed");
             Vec::new()
         })
     }

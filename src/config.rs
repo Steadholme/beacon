@@ -79,18 +79,21 @@ pub fn default_seed() -> Vec<Check> {
             kind: "http".to_string(),
             target: "https://sso.w33d.xyz/healthz".to_string(),
             enabled: true,
+            group_id: None,
         },
         Check {
             name: "Identity".to_string(),
             kind: "tcp".to_string(),
             target: "keystone:8443".to_string(),
             enabled: true,
+            group_id: None,
         },
         Check {
             name: "CA".to_string(),
             kind: "http".to_string(),
             target: "http://keyward:8200/healthz".to_string(),
             enabled: true,
+            group_id: None,
         },
     ]
 }
@@ -119,6 +122,7 @@ fn parse_seed(raw: &str) -> Result<Vec<Check>, serde_json::Error> {
             kind: e.kind,
             target: e.target,
             enabled: e.enabled,
+            group_id: None,
         })
         .collect())
 }

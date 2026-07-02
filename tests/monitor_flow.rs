@@ -86,6 +86,7 @@ async fn monitor_sweep_records_results() {
         kind: "http".to_string(),
         target: format!("http://{addr}/"),
         enabled: true,
+        group_id: None,
     }];
     let state = state_with(config).await;
 
@@ -125,6 +126,7 @@ async fn mixed_results_drive_degraded_status() {
             kind: "http".to_string(),
             target: "http://unused/".to_string(),
             enabled: true,
+            group_id: None,
         }];
         c
     })

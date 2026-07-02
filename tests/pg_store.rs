@@ -44,6 +44,7 @@ async fn pg_store_full_integration() {
         kind: "http".to_string(),
         target: "https://sso.w33d.xyz/healthz".to_string(),
         enabled: true,
+        group_id: None,
     };
     pg.insert_check(&check).await;
     pg.insert_check(&check).await;
