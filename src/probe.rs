@@ -168,8 +168,8 @@ mod tests {
     #[test]
     fn parse_http_url_variants() {
         assert_eq!(
-            parse_http_url("https://id.w33d.xyz/healthz"),
-            Some((true, "id.w33d.xyz".to_string(), 443, "/healthz".to_string()))
+            parse_http_url("https://sso.w33d.xyz/healthz"),
+            Some((true, "sso.w33d.xyz".to_string(), 443, "/healthz".to_string()))
         );
         assert_eq!(
             parse_http_url("http://keyward:8200/healthz"),

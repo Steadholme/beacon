@@ -42,7 +42,7 @@ async fn pg_store_full_integration() {
     let check = Check {
         name: "PgGateway".to_string(),
         kind: "http".to_string(),
-        target: "https://id.w33d.xyz/healthz".to_string(),
+        target: "https://sso.w33d.xyz/healthz".to_string(),
         enabled: true,
     };
     pg.insert_check(&check).await;
@@ -65,28 +65,75 @@ async fn pg_store_full_integration() {
     assert_eq!(total, 3, "dup (name,ts) not double-counted");
     assert_eq!(up, 2);
 
-    // Incident persistence + ordering (newest first).
+    // The daily bar aggregate groups the same rows by (name, epoch-day) in ONE query.
+    let daily = pg.daily_uptime(now - 86_400).await;
+    let today = daily
+        .iter()
+        .find(|d| d.name == "PgGateway" && d.day == (now - 30) / 86_400)
+        .expect("today's bucket present");
+    assert!(today.total >= 3 && today.up >= 2, "bucket aggregates results");
+
+    // Incident persistence + ordering (newest first) with severity/affected/resolved_at.
     pg.insert_incident(&beacon::store::Incident {
         id: "inc_a".to_string(),
         title: "older".to_string(),
         status: "resolved".to_string(),
+        severity: "minor".to_string(),
+        affected: "PgGateway".to_string(),
         body: "b".to_string(),
         created_at: now - 100,
         updated_at: now - 100,
+        resolved_at: now - 50,
     })
     .await;
     pg.insert_incident(&beacon::store::Incident {
         id: "inc_b".to_string(),
         title: "newer".to_string(),
         status: "investigating".to_string(),
+        severity: "critical".to_string(),
+        affected: String::new(),
         body: "b2".to_string(),
         created_at: now,
         updated_at: now,
+        resolved_at: 0,
     })
     .await;
     let incidents = pg.list_incidents().await;
     assert_eq!(incidents.len(), 2);
     assert_eq!(incidents[0].id, "inc_b", "newest first");
+    assert_eq!(incidents[0].severity, "critical");
+    let got = pg.get_incident("inc_a").await.expect("get by id");
+    assert_eq!(got.affected, "PgGateway");
+    assert_eq!(got.resolved_at, now - 50);
+
+    // Timeline updates + status transition round-trip.
+    pg.insert_incident_update(&beacon::store::IncidentUpdate {
+        id: "upd_1".to_string(),
+        incident_id: "inc_b".to_string(),
+        status: "monitoring".to_string(),
+        body: "fix deployed".to_string(),
+        created_at: now + 1,
+    })
+    .await;
+    pg.set_incident_status("inc_b", "monitoring", now + 1, 0).await;
+    let updates = pg.list_incident_updates().await;
+    assert!(updates.iter().any(|u| u.id == "upd_1" && u.incident_id == "inc_b"));
+    assert_eq!(pg.get_incident("inc_b").await.unwrap().status, "monitoring");
+    pg.set_incident_status("inc_b", "resolved", now + 2, now + 2).await;
+    assert_eq!(pg.get_incident("inc_b").await.unwrap().resolved_at, now + 2);
+
+    // Maintenance windows round-trip, ordered by starts_at.
+    pg.insert_maintenance(&beacon::store::Maintenance {
+        id: "mw_1".to_string(),
+        title: "db upgrade".to_string(),
+        body: "planned".to_string(),
+        starts_at: now - 60,
+        ends_at: now + 3_600,
+        affected: "PgGateway".to_string(),
+    })
+    .await;
+    let maintenances = pg.list_maintenances().await;
+    assert!(maintenances.iter().any(|m| m.id == "mw_1" && m.affected == "PgGateway"));
 
     // --- full HTTP flow through the PG-backed app --------------------------
     let mut state: AppState = build_dev_state().await;
@@ -97,16 +144,21 @@ async fn pg_store_full_integration() {
     assert_eq!(status, StatusCode::OK);
     assert!(String::from_utf8_lossy(&body).contains("PgGateway"));
 
-    // Post an incident via the SSO admin path, then it shows on the public JSON.
+    // Post an incident via the SSO admin path (identity + double-submit CSRF), then it
+    // shows on the public JSON.
     let (status, _) = raw_call(
         &state,
         Request::builder()
             .method("POST")
             .uri("/admin/incidents")
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, "__Host-csrf=tok_csrf_for_tests")
             .header("x-auth-subject", "u_admin")
             .header("x-auth-email", "admin@holdfast.local")
-            .body(Body::from("title=PG+incident&status=monitoring&body=via+pg"))
+            .body(Body::from(
+                "title=PG+incident&status=monitoring&severity=major&body=via+pg\
+                 &csrf_token=tok_csrf_for_tests",
+            ))
             .unwrap(),
     )
     .await;
@@ -121,8 +173,9 @@ async fn pg_store_full_integration() {
         .any(|i| i["title"] == "PG incident"));
 
     println!(
-        "PG STORE INTEGRATION OK: migrate (idempotent) + checks/results/uptime/incidents \
-         round-trip + full status/admin HTTP flow against real Postgres"
+        "PG STORE INTEGRATION OK: migrate (idempotent) + checks/results/uptime/daily-bars/\
+         incidents/updates/maintenances round-trip + full status/admin HTTP flow against \
+         real Postgres"
     );
 }
 

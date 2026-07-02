@@ -37,6 +37,13 @@ tracing-subscriber = "0.3"
 # macros, so the build needs NO database. rustls TLS (no openssl). Standard SQL only, so it
 # later runs unchanged on FusionDB over pgwire.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
+# CSPRNG bytes for the double-submit CSRF token. `getrandom` is a tiny libc-backed shim and
+# `hex` encodes the bytes (the same pair lodestar/inkwell/watchtower use).
+getrandom = "0.2"
+hex = "0.4"
+# Calendar formatting for the RSS feed (RFC 822 pubDate) and the 90-day uptime bar labels.
+# std-only, no macros/locales — mirrors inkwell's feed.
+time = { version = "0.3", default-features = false, features = ["std"] }
 # TLS client for HTTPS probes. rustls with the `ring` backend (NOT aws-lc-rs) avoids the
 # C/cmake toolchain — the same portability choice keystone/keyward made. `webpki-roots`
 # bundles the Mozilla trust anchors so the runtime image needs no system CA store for

@@ -45,6 +45,7 @@
         <div class="card__head"><h2>Post an incident</h2></div>
         <div class="card__body">
           <form method="post" action="/admin/incidents">
+            <input type="hidden" name="csrf_token" value="{{CSRF}}">
             <div class="field">
               <label for="title">Title</label>
               <input type="text" id="title" name="title" required placeholder="e.g. Identity provider degraded">
@@ -59,6 +60,18 @@
               </select>
             </div>
             <div class="field">
+              <label for="severity">Severity</label>
+              <select id="severity" name="severity">
+                <option value="minor">Minor</option>
+                <option value="major">Major</option>
+                <option value="critical">Critical</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="affected">Affected components</label>
+              <input type="text" id="affected" name="affected" placeholder="Comma-separated component names, e.g. Gateway, Identity">
+            </div>
+            <div class="field">
               <label for="body">Details</label>
               <textarea id="body" name="body" placeholder="What is happening and what is being done."></textarea>
             </div>
@@ -71,6 +84,43 @@
         <div class="card__head"><h2>Recent incidents</h2></div>
         <div class="card__body">
           {{INCIDENTS}}
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card__head"><h2>Schedule maintenance</h2></div>
+        <div class="card__body">
+          <form method="post" action="/admin/maintenances">
+            <input type="hidden" name="csrf_token" value="{{CSRF}}">
+            <div class="field">
+              <label for="m-title">Title</label>
+              <input type="text" id="m-title" name="title" required placeholder="e.g. Database upgrade">
+            </div>
+            <div class="field">
+              <label for="m-body">Details</label>
+              <textarea id="m-body" name="body" placeholder="What is being maintained and expected impact."></textarea>
+            </div>
+            <div class="field">
+              <label for="m-starts">Starts in (minutes, 0 = now)</label>
+              <input type="text" id="m-starts" name="starts_in_mins" value="0">
+            </div>
+            <div class="field">
+              <label for="m-duration">Duration (minutes)</label>
+              <input type="text" id="m-duration" name="duration_mins" value="60">
+            </div>
+            <div class="field">
+              <label for="m-affected">Affected components</label>
+              <input type="text" id="m-affected" name="affected" placeholder="Comma-separated component names, e.g. Gateway">
+            </div>
+            <button class="btn btn-primary" type="submit">Schedule window</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card__head"><h2>Maintenance windows</h2></div>
+        <div class="card__body">
+          {{MAINTENANCES}}
         </div>
       </section>
     </div>

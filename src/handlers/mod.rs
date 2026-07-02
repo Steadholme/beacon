@@ -8,6 +8,7 @@
 //! brand gradient, indigo accent, status pills, cards, app-bar.
 
 pub mod admin;
+pub mod feed;
 pub mod health;
 pub mod status;
 
@@ -73,6 +74,7 @@ pub fn status_label(status: &str) -> &'static str {
     match status {
         "down" => "Down",
         "degraded" => "Degraded",
+        "maintenance" => "Maintenance",
         _ => "Operational",
     }
 }
@@ -82,6 +84,7 @@ pub fn status_pill_class(status: &str) -> &'static str {
     match status {
         "down" => "pill-down",
         "degraded" => "pill-warn",
+        "maintenance" => "pill-info",
         _ => "pill-ok",
     }
 }
@@ -108,6 +111,11 @@ pub fn overall_banner(overall: &str) -> String {
             "Partial degradation",
             "Some components are degraded; service may be slower than usual.",
         ),
+        "maintenance" => (
+            "banner-info",
+            "Scheduled maintenance underway",
+            "Planned maintenance is in progress; affected components may be briefly unavailable.",
+        ),
         _ => (
             "banner-ok",
             "All systems operational",
@@ -117,6 +125,43 @@ pub fn overall_banner(overall: &str) -> String {
     format!(
         r#"<section class="banner {cls}"><span class="banner__dot" aria-hidden="true"></span><div><h2 class="banner__headline">{headline}</h2><p class="banner__sub">{sub}</p></div></section>"#
     )
+}
+
+/// Human label for an incident lifecycle status. Unknown tokens pass through as-is (older
+/// rows predate the allowlist), so the page never mislabels them.
+pub fn incident_status_label(status: &str) -> String {
+    match status {
+        "investigating" => "Investigating".to_string(),
+        "identified" => "Identified".to_string(),
+        "monitoring" => "Monitoring".to_string(),
+        "resolved" => "Resolved".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// A pill for an incident lifecycle status (investigating/identified draw attention,
+/// monitoring is informational, resolved is green).
+pub fn incident_status_pill(status: &str) -> String {
+    let cls = match status {
+        "investigating" | "identified" => "pill-warn",
+        "monitoring" => "pill-info",
+        "resolved" => "pill-ok",
+        _ => "pill-state",
+    };
+    format!(
+        r#"<span class="pill {cls}">{label}</span>"#,
+        label = esc(&incident_status_label(status)),
+    )
+}
+
+/// A pill for an incident severity (minor is neutral, major warns, critical is red).
+pub fn severity_pill(severity: &str) -> String {
+    let cls = match severity {
+        "critical" => "pill-down",
+        "major" => "pill-warn",
+        _ => "pill-state",
+    };
+    format!(r#"<span class="pill {cls}">{label}</span>"#, label = esc(severity))
 }
 
 /// Compact "N ago" relative time from `ts` to `now` (both epoch seconds). Avoids a date
@@ -144,5 +189,47 @@ pub fn fmt_latency(latency_ms: Option<i64>) -> String {
     match latency_ms {
         Some(ms) => format!("{ms} ms"),
         None => "—".to_string(),
+    }
+}
+
+/// Human calendar date in UTC, e.g. `Jul 2, 2026`. Falls back to the raw integer on an
+/// out-of-range timestamp.
+pub fn fmt_date(secs: i64) -> String {
+    match time::OffsetDateTime::from_unix_timestamp(secs) {
+        Ok(dt) => format!("{} {}, {}", month_abbr(dt.month()), dt.day(), dt.year()),
+        Err(_) => secs.to_string(),
+    }
+}
+
+/// Human date + time in UTC, e.g. `Jul 2, 2026 14:30 UTC` (maintenance windows).
+pub fn fmt_datetime(secs: i64) -> String {
+    match time::OffsetDateTime::from_unix_timestamp(secs) {
+        Ok(dt) => format!(
+            "{} {}, {} {:02}:{:02} UTC",
+            month_abbr(dt.month()),
+            dt.day(),
+            dt.year(),
+            dt.hour(),
+            dt.minute(),
+        ),
+        Err(_) => secs.to_string(),
+    }
+}
+
+pub(crate) fn month_abbr(m: time::Month) -> &'static str {
+    use time::Month::*;
+    match m {
+        January => "Jan",
+        February => "Feb",
+        March => "Mar",
+        April => "Apr",
+        May => "May",
+        June => "Jun",
+        July => "Jul",
+        August => "Aug",
+        September => "Sep",
+        October => "Oct",
+        November => "Nov",
+        December => "Dec",
     }
 }

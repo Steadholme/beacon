@@ -6,11 +6,15 @@
 //! [`monitor`] sweep directly, exactly like keystone/keyward.
 //!
 //! Endpoints:
-//! - `GET  /healthz`          liveness (container HEALTHCHECK)
-//! - `GET  /status`           PUBLIC server-rendered status page (no auth)
-//! - `GET  /api/status`       PUBLIC machine-readable status JSON (no auth)
-//! - `GET  /admin`            operator dashboard (behind gateway `auth=sso`)
-//! - `POST /admin/incidents`  post a manual incident (behind gateway `auth=sso`)
+//! - `GET  /healthz`                  liveness (container HEALTHCHECK)
+//! - `GET  /status`                   PUBLIC server-rendered status page (no auth)
+//! - `GET  /api/status`               PUBLIC machine-readable status JSON (no auth)
+//! - `GET  /feed.xml`                 PUBLIC RSS 2.0 incident feed (no auth)
+//! - `GET  /admin`                    operator dashboard (behind gateway `auth=sso`)
+//! - `POST /admin/incidents`          open an incident (SSO identity + CSRF)
+//! - `POST /admin/incidents/update`   append a timeline update / move status (SSO + CSRF)
+//! - `POST /admin/incidents/resolve`  resolve an incident (SSO + CSRF)
+//! - `POST /admin/maintenances`       schedule a maintenance window (SSO + CSRF)
 
 pub mod auth;
 pub mod config;
@@ -49,9 +53,22 @@ pub fn app(state: AppState) -> Router {
         .route("/", get(handlers::status::status_page))
         .route("/status", get(handlers::status::status_page))
         .route("/api/status", get(handlers::status::api_status))
-        // --- admin (gateway auth=sso; reads injected X-Auth-* identity) ---
+        .route("/feed.xml", get(handlers::feed::feed_xml))
+        // --- admin (gateway auth=sso; reads injected X-Auth-* identity + CSRF on writes) ---
         .route("/admin", get(handlers::admin::admin_page))
         .route("/admin/incidents", post(handlers::admin::create_incident))
+        .route(
+            "/admin/incidents/update",
+            post(handlers::admin::post_incident_update),
+        )
+        .route(
+            "/admin/incidents/resolve",
+            post(handlers::admin::resolve_incident),
+        )
+        .route(
+            "/admin/maintenances",
+            post(handlers::admin::create_maintenance),
+        )
         // Sluice forwards the gateway prefix UNMODIFIED (no strip): the admin dashboard is
         // mounted at the `/beacon` route, so a request arrives here as `GET /beacon`.
         // Register the admin page as the fallback (mirrors watchtower) so it renders behind

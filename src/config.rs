@@ -77,7 +77,7 @@ pub fn default_seed() -> Vec<Check> {
         Check {
             name: "Gateway".to_string(),
             kind: "http".to_string(),
-            target: "https://id.w33d.xyz/healthz".to_string(),
+            target: "https://sso.w33d.xyz/healthz".to_string(),
             enabled: true,
         },
         Check {
