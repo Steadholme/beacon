@@ -21,9 +21,19 @@
   </header>
 
   <main class="console">
-    <div class="console__head">
-      <h1>System status</h1>
-      <p class="sub">Live availability of the HOLDFAST sovereign infrastructure.</p>
+    <div class="console__head statushead">
+      <div class="statushead__text">
+        <h1>System status</h1>
+        <p class="sub">Live availability of the HOLDFAST sovereign infrastructure.</p>
+      </div>
+      <details class="updates-pop">
+        <summary class="btn btn-secondary updates-pop__btn">Get updates</summary>
+        <nav class="updates-pop__menu">
+          <a class="updates-pop__item" href="#subscribe">Webhook notifications</a>
+          <a class="updates-pop__item" href="/feed.xml">RSS feed</a>
+          <a class="updates-pop__item" href="/api/status">JSON API</a>
+        </nav>
+      </details>
     </div>
 
     {{BANNER}}
@@ -33,7 +43,7 @@
     {{MAINTENANCE}}
 
     <section class="card">
-      <div class="card__head"><h2>Components</h2></div>
+      <div class="card__head card__head--split"><h2>Components</h2>{{COMP_COUNT}}</div>
       <div class="card__body">
         {{COMPONENTS}}
       </div>
@@ -48,7 +58,7 @@
 
   <footer class="site-foot">
     <span>HOLDFAST · Sovereign infrastructure</span>
-    <span>Updated {{UPDATED}}</span>
+    <span class="site-foot__links"><a href="/feed.xml">RSS</a> · <a href="/api/status">JSON API</a> · Updated {{UPDATED}}</span>
   </footer>
 </body>
 </html>

@@ -201,41 +201,6 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); backgroun
 .empty { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .empty__ok { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ok); }
 
-/* ---- Overall status banner --------------------------------------------- */
-.banner {
-  display: flex; align-items: center; gap: 14px;
-  padding: 18px 22px; border-radius: var(--radius);
-  border: 1px solid var(--border); background: var(--surface);
-  margin-bottom: 24px; box-shadow: var(--sh-xs);
-}
-.banner__dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
-.banner__headline { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.015em; }
-.banner__sub { margin: 3px 0 0; font-size: 13px; color: var(--ink-2); }
-.banner-ok { background: var(--ok-soft); border-color: var(--ok-border); }
-.banner-ok .banner__dot { background: var(--ok); }
-.banner-ok .banner__headline { color: var(--ok-ink); }
-.banner-warn { background: var(--warn-soft); border-color: var(--warn-border); }
-.banner-warn .banner__dot { background: var(--warn); }
-.banner-warn .banner__headline { color: var(--warn-ink); }
-.banner-down { background: var(--down-soft); border-color: var(--down-border); }
-.banner-down .banner__dot { background: var(--down); }
-.banner-down .banner__headline { color: var(--down-ink); }
-
-/* ---- Component / uptime rows ------------------------------------------- */
-.component {
-  display: flex; align-items: center; gap: 18px;
-  padding: 16px 2px; border-top: 1px solid var(--border);
-}
-.component:first-child { border-top: 0; padding-top: 2px; }
-.component__main { flex: 1 1 auto; min-width: 0; }
-.component__name { font-size: 14px; font-weight: 600; color: var(--ink); }
-.component__meta { margin-top: 3px; font-size: 12.5px; color: var(--ink-3); }
-.component__uptime { display: flex; gap: 22px; flex: none; }
-.uptime-cell { display: flex; flex-direction: column; align-items: flex-end; min-width: 56px; }
-.uptime-val { font-size: 13px; font-weight: 600; color: var(--ink); font-family: var(--mono); }
-.uptime-lab { font-size: 10.5px; letter-spacing: .02em; color: var(--ink-3); margin-top: 2px; }
-.component__status { flex: none; min-width: 110px; text-align: right; }
-
 /* ---- Incident cards ----------------------------------------------------- */
 .incident {
   padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-md);
@@ -254,18 +219,9 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); backgroun
   color: var(--ink-3); font-size: 12.5px; border-top: 1px solid var(--border);
 }
 
-@media (max-width: 640px) {
-  .component { flex-wrap: wrap; }
-  .component__uptime { gap: 16px; order: 3; width: 100%; justify-content: flex-start; }
-  .component__status { min-width: 0; }
-}
-
 /* --- Status page additions: incidents, maintenance, 90-day uptime bars ------------- */
 /* Info tint (accent-derived) for maintenance + monitoring states. */
 .pill-info { background: var(--accent-soft); color: var(--accent-2); border-color: var(--accent-border); }
-.banner-info { background: var(--accent-soft); border-color: var(--accent-border); }
-.banner-info .banner__dot { background: var(--accent); }
-.banner-info .banner__headline { color: var(--accent-2); }
 /* Severity-tinted incident cards (active incidents + maintenance notices). */
 .incident-card { border-left: 3px solid var(--border-2); }
 .incident-card + .incident-card { margin-top: 14px; }
@@ -286,28 +242,9 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); backgroun
 .timeline__time { font-size: 11.5px; color: var(--ink-3); }
 .incident__form { margin-top: 12px; }
 /* Past incidents, grouped by day. */
-.day-group { margin-bottom: 18px; }
-.day-group__date { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; letter-spacing: .02em; color: var(--ink-3); }
-/* The classic statuspage bar row: one 4px bar per day, 90 days, oldest first. */
-.component { flex-wrap: wrap; }
-.component__bars { flex-basis: 100%; order: 4; margin-top: 10px; }
-.bars { display: flex; gap: 2px; }
-.bar { width: 4px; height: 28px; border-radius: 1px; flex: none; background: var(--border); }
-.bar-ok { background: var(--ok); }
-.bar-warn { background: var(--warn); }
-.bar-down { background: var(--down); }
-.bar-unknown { background: var(--border); }
-.bars__legend { display: flex; justify-content: space-between; margin-top: 4px; font-size: 10.5px; color: var(--ink-3); }
-/* Response-time sparkline (pure SVG) + current/avg figures under a component. */
-.component__spark { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
-.spark { width: 140px; height: 26px; flex: none; }
-.spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.spark__fig { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
-/* Component group sections (rolled-up status pill per section). */
-.group { margin-top: 6px; }
-.group + .group { margin-top: 22px; }
-.group__head { display: flex; align-items: center; gap: 10px; padding: 2px 2px 6px; border-bottom: 1px solid var(--border); }
-.group__name { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .01em; color: var(--ink); }
+.day-group { margin-bottom: 16px; }
+.day-group__date { margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-weight: 600; letter-spacing: .02em; color: var(--ink-2); }
+.day-group__none { margin: 0; font-size: 12.5px; color: var(--ink-3); }
 /* Maintenance countdown chip. */
 .countdown { font-size: 12px; font-weight: 600; color: var(--accent-2); }
 /* Insert-template button row (admin update/create forms). */
@@ -319,3 +256,104 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); backgroun
 .assign-form select { max-width: 220px; }
 /* Public subscribe form. */
 .subscribe-form { max-width: 460px; }
+
+/* --- Status page redesign: head row, solid hero, grouped rows, 90-day bars --------- */
+/* Page-head row: title block + "Get updates" popover (pure details/summary). */
+.statushead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.updates-pop { position: relative; flex: none; }
+.updates-pop__btn { list-style: none; cursor: pointer; }
+.updates-pop__btn::-webkit-details-marker { display: none; }
+.updates-pop__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); min-width: 220px; z-index: 30;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: var(--sh-pop); padding: 6px; display: grid; gap: 2px;
+}
+.updates-pop__item { display: block; padding: 8px 10px; border-radius: var(--radius-sm); font-size: 13px; color: var(--ink-2); text-decoration: none; }
+.updates-pop__item:hover { background: var(--surface-2); color: var(--ink); }
+/* Solid overall-status hero — the page's single saturated surface (deep *-ink fills). */
+.status-hero {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap;
+  padding: 18px 22px; border-radius: var(--radius); margin-bottom: 24px; color: #fff;
+}
+.status-hero--ok { background: var(--ok-ink); }
+.status-hero--warn { background: var(--warn-ink); }
+.status-hero--down { background: var(--down-ink); }
+.status-hero--info { background: var(--accent-2); }
+.status-hero__headline { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.015em; color: #fff; }
+.status-hero__sub { margin: 3px 0 0; font-size: 12.5px; color: rgba(255,255,255,.92); }
+.status-hero__meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12.5px; color: rgba(255,255,255,.92); text-align: right; }
+.status-hero__uptime strong { font-family: var(--mono); font-weight: 600; color: #fff; }
+/* Components card head (title + meta split). */
+.card__head--split { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card__head-meta { font-size: 12.5px; color: var(--ink-3); }
+/* Collapsible component groups (details/summary). */
+.cgroup { border-top: 1px solid var(--border); }
+.cgroup:first-child { border-top: 0; }
+.cgroup__head { display: flex; align-items: center; gap: 10px; padding: 12px 4px; cursor: pointer; list-style: none; border-radius: var(--radius-sm); }
+.cgroup__head::-webkit-details-marker { display: none; }
+.cgroup__head:hover { background: var(--surface-2); }
+.cgroup__chev { width: 7px; height: 7px; flex: none; margin: 0 2px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(-45deg); transition: transform .12s; }
+.cgroup[open] > .cgroup__head .cgroup__chev { transform: rotate(45deg); }
+.cgroup__name { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+.cgroup__count { font-size: 12px; color: var(--ink-3); }
+.cgroup__uptime { margin-left: auto; font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+.cgroup__body { padding: 0 0 6px 19px; }
+/* One-line component row: dot+name | latency | 90-day track | pct | state. */
+.crow { display: grid; grid-template-columns: 224px 64px 1fr 72px 96px; gap: 12px; align-items: center; padding: 9px 4px; border-top: 1px solid var(--border); }
+.crow:first-child { border-top: 0; }
+.crow__id { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.crow__dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ok); }
+.crow__dot--warn { background: var(--warn); }
+.crow__dot--down { background: var(--down); }
+.crow__dot--info { background: var(--accent); }
+.crow__name { font-size: 13.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crow__lat { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); text-align: right; }
+.crow__track { min-width: 0; }
+.crow__pct { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--ink); text-align: right; }
+.crow__state { font-size: 12px; font-weight: 550; text-align: right; color: var(--ok-ink); }
+.crow__state--warn { color: var(--warn-ink); }
+.crow__state--down { color: var(--down-ink); }
+.crow__state--info { color: var(--accent-2); }
+.crow__since { grid-column: 3; grid-row: 2; font-size: 10.5px; color: var(--ink-3); margin-top: 1px; }
+/* 90-day uptime bars: full-width flex, sibling-dim hover, CSS-only tooltip. */
+.bars { display: flex; gap: 2px; height: 16px; }
+.bar { flex: 1 1 0; min-width: 2px; border-radius: 2px; position: relative; background: var(--ok); }
+.bar-warn { background: var(--warn); }
+.bar-down { background: var(--down); }
+.bar-unknown { background: var(--bg-2); height: 8px; align-self: center; }
+@media (hover: hover) {
+  .bar { transition: opacity .12s, transform .12s; }
+  .bars:hover .bar { opacity: .4; }
+  .bars .bar:hover { opacity: 1; transform: scaleY(1.15); }
+}
+.bar:hover::after {
+  content: attr(data-date) " · " attr(data-uptime);
+  position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: #fff; font-size: 11px; line-height: 1.4;
+  padding: 4px 8px; border-radius: var(--radius-sm); white-space: nowrap; z-index: 20; pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bar, .cgroup__chev { transition: none; }
+  .bars .bar:hover { transform: none; }
+}
+/* Footer links. */
+.site-foot__links a { color: var(--ink-3); text-decoration: none; }
+.site-foot__links a:hover { color: var(--accent-2); }
+/* Responsive. */
+@media (max-width: 920px) {
+  .crow { grid-template-columns: 170px 56px 1fr 64px 88px; }
+}
+@media (max-width: 640px) {
+  .statushead { flex-direction: column; }
+  .status-hero__meta { align-items: flex-start; text-align: left; }
+  .crow { grid-template-columns: 1fr auto; row-gap: 6px; padding: 12px 2px; }
+  .crow__id { grid-column: 1; grid-row: 1; }
+  .crow__state { grid-column: 2; grid-row: 1; }
+  .crow__track { grid-column: 1 / -1; grid-row: 2; }
+  .crow__lat { grid-column: 1; grid-row: 3; text-align: left; }
+  .crow__pct { grid-column: 2; grid-row: 3; }
+  .crow__since { grid-column: 1 / -1; grid-row: 4; }
+  .bars { height: 14px; gap: 1px; }
+  .bar { min-width: 1px; border-radius: 1px; }
+  .cgroup__count { display: none; }
+}

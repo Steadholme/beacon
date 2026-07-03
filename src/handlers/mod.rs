@@ -99,35 +99,6 @@ pub fn status_pill(status: &str) -> String {
     )
 }
 
-/// Render the overall banner block for the public page.
-pub fn overall_banner(overall: &str) -> String {
-    let (cls, headline, sub) = match overall {
-        "down" => (
-            "banner-down",
-            "Service disruption",
-            "One or more components are down. We are on it.",
-        ),
-        "degraded" => (
-            "banner-warn",
-            "Partial degradation",
-            "Some components are degraded; service may be slower than usual.",
-        ),
-        "maintenance" => (
-            "banner-info",
-            "Scheduled maintenance underway",
-            "Planned maintenance is in progress; affected components may be briefly unavailable.",
-        ),
-        _ => (
-            "banner-ok",
-            "All systems operational",
-            "Every monitored component is up and healthy.",
-        ),
-    };
-    format!(
-        r#"<section class="banner {cls}"><span class="banner__dot" aria-hidden="true"></span><div><h2 class="banner__headline">{headline}</h2><p class="banner__sub">{sub}</p></div></section>"#
-    )
-}
-
 /// Human label for an incident lifecycle status. Unknown tokens pass through as-is (older
 /// rows predate the allowlist), so the page never mislabels them.
 pub fn incident_status_label(status: &str) -> String {
@@ -162,7 +133,10 @@ pub fn severity_pill(severity: &str) -> String {
         "major" => "pill-warn",
         _ => "pill-state",
     };
-    format!(r#"<span class="pill {cls}">{label}</span>"#, label = esc(severity))
+    format!(
+        r#"<span class="pill {cls}">{label}</span>"#,
+        label = esc(severity)
+    )
 }
 
 /// Compact "N ago" relative time from `ts` to `now` (both epoch seconds). Avoids a date

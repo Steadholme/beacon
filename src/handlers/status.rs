@@ -1,9 +1,9 @@
 //! PUBLIC status surface: the server-rendered status page and the machine-readable JSON.
 //!
 //! Both are unauthenticated by design (placed behind a Sluice `auth=public` route). The
-//! page mirrors the HOLDFAST enterprise brand: app-bar, overall banner, an active-incidents
+//! page mirrors the HOLDFAST enterprise brand: app-bar, overall hero, an active-incidents
 //! section (severity-tinted cards with an expandable update timeline), maintenance notices,
-//! component cards with status pills + rolling uptime + the classic 90-day uptime bar row,
+//! compact component rows with rolling uptime + the classic 90-day uptime bar row,
 //! and a "Past incidents" section (last 14 days, grouped by day).
 
 use axum::extract::State;
@@ -11,12 +11,12 @@ use axum::response::Html;
 use axum::Json;
 
 use crate::handlers::{
-    esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, incident_status_pill, overall_banner,
-    rel_time, severity_pill, status_pill, userbox, APP_CSS, SHIELD_SVG,
+    esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, incident_status_pill, rel_time,
+    severity_pill, status_label, status_pill, userbox, APP_CSS, SHIELD_SVG,
 };
 use crate::model::{
-    affected_names, build_status, day_bucket, maintenance_ongoing, ComponentView, StatusView,
-    WINDOW_14D,
+    affected_names, build_status, day_bucket, group_rollup, maintenance_ongoing, ComponentView,
+    StatusView, DAY_SECS,
 };
 use crate::store::{Incident, IncidentUpdate};
 use crate::{now_secs, AppState};
@@ -41,25 +41,93 @@ fn render_status(view: &StatusView, now: i64) -> String {
         .replace("{{CSS}}", APP_CSS)
         .replace("{{SHIELD}}", SHIELD_SVG)
         .replace("{{USERBOX}}", &userbox("System Status", None))
-        .replace("{{BANNER}}", &overall_banner(view.overall))
+        .replace("{{BANNER}}", &render_hero(view, now))
         .replace("{{ACTIVE_INCIDENTS}}", &render_active_incidents(view, now))
         .replace("{{MAINTENANCE}}", &render_maintenances(view, now))
+        .replace("{{COMP_COUNT}}", &render_component_count(view))
         .replace("{{COMPONENTS}}", &render_components(view, now))
         .replace("{{PAST_INCIDENTS}}", &render_past_incidents(view, now))
         .replace("{{SUBSCRIBE}}", &render_subscribe())
         .replace("{{UPDATED}}", &rel_time(view.updated_at, now))
 }
 
-/// The Components body. With NO groups configured this renders the flat component list
-/// exactly as before (backward-compatible byte-for-byte). With groups, components are
-/// rendered under their group section (each with a rolled-up status pill), and any ungrouped
+fn checked_uptime_avg<'a, I>(components: I) -> Option<f64>
+where
+    I: IntoIterator<Item = &'a ComponentView>,
+{
+    let (sum, count) = components
+        .into_iter()
+        .filter(|c| c.last_checked.is_some())
+        .fold((0.0, 0usize), |(sum, count), c| {
+            (sum + c.uptime_90d, count + 1)
+        });
+    (count > 0).then_some(sum / count as f64)
+}
+
+fn render_hero(view: &StatusView, now: i64) -> String {
+    let (cls, headline, sub) = match view.overall {
+        "down" => (
+            "status-hero--down",
+            "Service disruption",
+            "One or more components are down. We are on it.",
+        ),
+        "degraded" => (
+            "status-hero--warn",
+            "Partial degradation",
+            "Some components are degraded; service may be slower than usual.",
+        ),
+        "maintenance" => (
+            "status-hero--info",
+            "Scheduled maintenance underway",
+            "Planned maintenance is in progress; affected components may be briefly unavailable.",
+        ),
+        _ => (
+            "status-hero--ok",
+            "All systems operational",
+            "Every monitored component is up and healthy.",
+        ),
+    };
+    let uptime = checked_uptime_avg(view.components.iter())
+        .map(|avg| {
+            format!(
+                r#"<span class="status-hero__uptime" title="Average 90-day uptime across all components"><strong>{avg:.2}%</strong> uptime · 90 days</span>"#
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"<section class="status-hero {cls}">
+  <div class="status-hero__text">
+    <h2 class="status-hero__headline">{headline}</h2>
+    <p class="status-hero__sub">{sub}</p>
+  </div>
+  <div class="status-hero__meta">
+    {uptime}
+    <span class="status-hero__updated">Updated {updated}</span>
+  </div>
+</section>"#,
+        updated = esc(&rel_time(view.updated_at, now)),
+    )
+}
+
+fn render_component_count(view: &StatusView) -> String {
+    if view.components.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<span class="card__head-meta">{} monitored</span>"#,
+            view.components.len()
+        )
+    }
+}
+
+/// The Components body. With no groups configured this renders a flat list of compact rows.
+/// With groups, components are rendered under collapsible group sections, and any ungrouped
 /// components fall into a trailing "Other" section.
 fn render_components(view: &StatusView, now: i64) -> String {
     if view.components.is_empty() {
         return r#"<div class="empty">No components are being monitored yet.</div>"#.to_string();
     }
     if view.groups.is_empty() {
-        // Flat list — unchanged legacy output.
         let mut rows = String::new();
         for c in &view.components {
             rows.push_str(&render_component_row(c, now));
@@ -67,7 +135,7 @@ fn render_components(view: &StatusView, now: i64) -> String {
         return rows;
     }
 
-    // Grouped: a section per group (ordered by the view), then ungrouped components last.
+    // Grouped: one collapsible section per group (ordered by the view), then ungrouped last.
     let mut out = String::new();
     for g in &view.groups {
         let members: Vec<&ComponentView> = view
@@ -78,141 +146,144 @@ fn render_components(view: &StatusView, now: i64) -> String {
         if members.is_empty() {
             continue;
         }
-        out.push_str(&format!(
-            r#"<div class="group"><div class="group__head"><h3 class="group__name">{name}</h3>{pill}</div>"#,
-            name = esc(&g.name),
-            pill = status_pill(g.status),
-        ));
-        for c in members {
-            out.push_str(&render_component_row(c, now));
-        }
-        out.push_str("</div>");
+        out.push_str(&render_group_section(&g.name, &members, g.status, now));
     }
 
     // Ungrouped components (group_id None, or pointing at a group that no longer exists).
-    let known: std::collections::HashSet<&str> = view.groups.iter().map(|g| g.id.as_str()).collect();
+    let known: std::collections::HashSet<&str> =
+        view.groups.iter().map(|g| g.id.as_str()).collect();
     let ungrouped: Vec<&ComponentView> = view
         .components
         .iter()
         .filter(|c| c.group_id.as_deref().is_none_or(|id| !known.contains(id)))
         .collect();
     if !ungrouped.is_empty() {
-        out.push_str(r#"<div class="group"><div class="group__head"><h3 class="group__name">Other</h3></div>"#);
-        for c in ungrouped {
-            out.push_str(&render_component_row(c, now));
-        }
-        out.push_str("</div>");
+        let statuses: Vec<&str> = ungrouped.iter().map(|c| c.status).collect();
+        out.push_str(&render_group_section(
+            "Other",
+            &ungrouped,
+            group_rollup(&statuses),
+            now,
+        ));
     }
     out
 }
 
-/// Render a single component row: name + meta, a response-time sparkline, rolling uptime, the
-/// status pill, and the classic 90-day uptime bar row.
-fn render_component_row(c: &ComponentView, now: i64) -> String {
-    let last = match c.last_checked {
-        Some(ts) => format!("checked {}", esc(&rel_time(ts, now))),
-        None => "awaiting first check".to_string(),
-    };
-    // The classic statuspage bar row: one 4px bar per day, oldest first, hover title carrying
-    // the date + up-ratio (pure HTML/CSS — no script).
-    let mut bars = String::new();
-    for d in &c.days {
-        let title = match d.uptime {
-            Some(pct) => format!("{} · {pct:.2}%", d.date),
-            None => format!("{} · no data", d.date),
-        };
-        bars.push_str(&format!(
-            r#"<span class="bar bar-{cls}" title="{title}"></span>"#,
-            cls = d.status,
-            title = esc(&title),
-        ));
+fn render_group_section(name: &str, members: &[&ComponentView], rollup: &str, now: i64) -> String {
+    let open = if rollup != "operational" { " open" } else { "" };
+    let uptime = checked_uptime_avg(members.iter().copied())
+        .map(|avg| {
+            format!(
+                r#"<span class="cgroup__uptime" title="Average 90-day uptime across this group">{avg:.2}%</span>"#
+            )
+        })
+        .unwrap_or_default();
+    let mut out = format!(
+        r#"<details class="cgroup"{open}>
+  <summary class="cgroup__head">
+    <span class="cgroup__chev" aria-hidden="true"></span>
+    <h3 class="cgroup__name">{name}</h3>
+    <span class="cgroup__count">{count} components</span>
+    {uptime}
+    {pill}
+  </summary>
+  <div class="cgroup__body">"#,
+        name = esc(name),
+        count = members.len(),
+        pill = status_pill(rollup),
+    );
+    for c in members {
+        out.push_str(&render_component_row(c, now));
     }
-    format!(
-        r#"<div class="component">
-  <div class="component__main">
-    <div class="component__name">{name}</div>
-    <div class="component__meta">{last} · {latency}</div>
-    {spark}
-  </div>
-  <div class="component__uptime">
-    <div class="uptime-cell"><span class="uptime-val">{u24:.2}%</span><span class="uptime-lab">24h</span></div>
-    <div class="uptime-cell"><span class="uptime-val">{u7:.2}%</span><span class="uptime-lab">7d</span></div>
-    <div class="uptime-cell"><span class="uptime-val">{u90:.2}%</span><span class="uptime-lab">90d</span></div>
-  </div>
-  <div class="component__status">{pill}</div>
-  <div class="component__bars">
-    <div class="bars">{bars}</div>
-    <div class="bars__legend"><span>90 days ago</span><span>{u90:.2}% uptime</span><span>Today</span></div>
-  </div>
-</div>"#,
-        name = esc(&c.name),
-        last = last,
-        latency = esc(&fmt_latency(c.latency_ms)),
-        spark = render_sparkline(c),
-        u24 = c.uptime_24h,
-        u7 = c.uptime_7d,
-        u90 = c.uptime_90d,
-        pill = status_pill(c.status),
-        bars = bars,
-    )
+    out.push_str("</div></details>");
+    out
 }
 
-/// A pure-SVG response-time sparkline (24h hourly means) plus current + average figures. All
-/// values are numeric, so nothing here needs escaping. When fewer than two hours have data
-/// the trend line is omitted (just the figures), keeping the row clean for fresh components.
-fn render_sparkline(c: &ComponentView) -> String {
-    let known: Vec<(usize, i64)> = c
-        .latency_points
-        .iter()
-        .enumerate()
-        .filter_map(|(i, v)| v.map(|v| (i, v)))
-        .collect();
-    let figures = format!(
-        r#"<span class="spark__fig">now {now}</span><span class="spark__fig">avg {avg}</span>"#,
-        now = fmt_latency(c.latency_ms),
-        avg = fmt_latency(c.latency_avg_ms),
-    );
-    if known.len() < 2 {
-        return format!(r#"<div class="component__spark">{figures}</div>"#);
+fn state_mod(status: &str) -> &'static str {
+    match status {
+        "down" => "down",
+        "degraded" => "warn",
+        "maintenance" => "info",
+        _ => "ok",
     }
+}
 
-    // Normalize into a 140x26 viewBox (a flat mid-line when every value is equal).
-    const W: f64 = 140.0;
-    const H: f64 = 26.0;
-    const PAD: f64 = 3.0;
-    let n = c.latency_points.len().max(2) as f64;
-    let (mut lo, mut hi) = (i64::MAX, i64::MIN);
-    for &(_, v) in &known {
-        lo = lo.min(v);
-        hi = hi.max(v);
-    }
-    let span = (hi - lo).max(1) as f64;
-    let mut pts = String::new();
-    for &(i, v) in &known {
-        let x = PAD + (i as f64) / (n - 1.0) * (W - 2.0 * PAD);
-        let y = if hi == lo {
-            H / 2.0
-        } else {
-            H - PAD - (v - lo) as f64 / span * (H - 2.0 * PAD)
+/// Render a compact component row with latest latency, 90-day uptime, and the 90 daily bars.
+fn render_component_row(c: &ComponentView, now: i64) -> String {
+    let first_data_idx = c.days.iter().position(|d| d.uptime.is_some());
+    let monitoring_since =
+        first_data_idx.map(|idx| fmt_date((day_bucket(now) - 89 + idx as i64) * DAY_SECS));
+
+    let mut bars = String::new();
+    for d in &c.days {
+        let data_uptime = match d.uptime {
+            Some(pct) => format!("{pct:.2}%"),
+            None => match &monitoring_since {
+                Some(date) => format!("no data — monitoring began {date}"),
+                None => "no data".to_string(),
+            },
         };
-        if !pts.is_empty() {
-            pts.push(' ');
-        }
-        pts.push_str(&format!("{x:.1},{y:.1}"));
+        bars.push_str(&format!(
+            r#"<span class="bar bar-{cls}" data-date="{date}" data-status="{status}" data-uptime="{uptime}"></span>"#,
+            cls = d.status,
+            date = esc(&d.date),
+            status = esc(d.status),
+            uptime = esc(&data_uptime),
+        ));
     }
+    let since = if c.days.first().is_some_and(|d| d.uptime.is_none()) {
+        match monitoring_since {
+            Some(date) => format!(
+                r#"<span class="crow__since">monitoring since {}</span>"#,
+                esc(&date)
+            ),
+            None => r#"<span class="crow__since">awaiting first check</span>"#.to_string(),
+        }
+    } else {
+        String::new()
+    };
+    let latest_latency = fmt_latency(c.latency_ms);
+    let latency = match c.latency_avg_ms {
+        Some(avg) => format!("~{avg} ms"),
+        None => "—".to_string(),
+    };
+    let pct_title = if c.last_checked.is_some() {
+        "90-day uptime"
+    } else {
+        "awaiting first check"
+    };
+    let pct = if c.last_checked.is_some() {
+        format!("{:.2}%", c.uptime_90d)
+    } else {
+        "—".to_string()
+    };
+    let state = state_mod(c.status);
     format!(
-        r#"<div class="component__spark"><svg class="spark" viewBox="0 0 {w} {h}" preserveAspectRatio="none" aria-hidden="true"><polyline points="{pts}"/></svg>{figures}</div>"#,
-        w = W as i64,
-        h = H as i64,
-        pts = pts,
-        figures = figures,
+        r#"<div class="crow">
+  <span class="crow__id">
+    <span class="crow__dot crow__dot--{state}" aria-hidden="true"></span>
+    <span class="crow__name" title="{name}">{name}</span>
+  </span>
+  <span class="crow__lat" title="24h average · latest {latest_latency}">{latency}</span>
+  <div class="crow__track" aria-hidden="true"><div class="bars">{bars}</div></div>
+  <span class="crow__pct" title="{pct_title}">{pct}</span>
+  <span class="crow__state crow__state--{state}">{label}</span>
+  {since}
+</div>"#,
+        name = esc(&c.name),
+        latest_latency = esc(&latest_latency),
+        latency = esc(&latency),
+        bars = bars,
+        pct_title = pct_title,
+        pct = esc(&pct),
+        label = status_label(c.status),
     )
 }
 
 /// The public "Subscribe to updates" card: a webhook URL form posting to `/subscriptions`.
 /// Public (no CSRF); double opt-in confirmation gates any delivery.
 fn render_subscribe() -> String {
-    r#"<section class="card">
+    r#"<section class="card" id="subscribe">
   <div class="card__head"><h2>Subscribe to updates</h2></div>
   <div class="card__body">
     <p class="hint">Get a signed JSON webhook POST whenever an incident is opened or updated.</p>
@@ -326,12 +397,18 @@ fn render_maintenances(view: &StatusView, now: i64) -> String {
         let (state_pill, countdown) = if maintenance_ongoing(m, now) {
             (
                 r#"<span class="pill pill-info">in progress</span>"#,
-                format!(r#"<span class="countdown">ends in {}</span>"#, esc(&fmt_countdown(m.ends_at - now))),
+                format!(
+                    r#"<span class="countdown">ends in {}</span>"#,
+                    esc(&fmt_countdown(m.ends_at - now))
+                ),
             )
         } else {
             (
                 r#"<span class="pill pill-state">scheduled</span>"#,
-                format!(r#"<span class="countdown">starts in {}</span>"#, esc(&fmt_countdown(m.starts_at - now))),
+                format!(
+                    r#"<span class="countdown">starts in {}</span>"#,
+                    esc(&fmt_countdown(m.starts_at - now))
+                ),
             )
         };
         out.push_str(&format!(
@@ -353,56 +430,57 @@ fn render_maintenances(view: &StatusView, now: i64) -> String {
     out
 }
 
-/// "Past incidents": the last 14 days of incident history, grouped by calendar day (newest
-/// day first), resolved incidents muted. The incidents are already newest-first.
+/// "Past incidents": fixed calendar buckets for the last 14 days, newest day first.
 fn render_past_incidents(view: &StatusView, now: i64) -> String {
-    let recent: Vec<&Incident> = view
-        .incidents
-        .iter()
-        .filter(|i| i.created_at >= now - WINDOW_14D)
-        .collect();
-    if recent.is_empty() {
-        return r#"<div class="empty"><span class="empty__ok" aria-hidden="true"></span>No incidents in the last 14 days. All clear.</div>"#
-            .to_string();
-    }
     let mut out = String::new();
-    let mut current_day = i64::MIN;
-    for inc in recent {
-        let day = day_bucket(inc.created_at);
-        if day != current_day {
-            if current_day != i64::MIN {
-                out.push_str("</div>");
-            }
-            current_day = day;
-            out.push_str(&format!(
-                r#"<div class="day-group"><h3 class="day-group__date">{}</h3>"#,
-                esc(&fmt_date(inc.created_at)),
-            ));
-        }
-        let resolved = inc.status == "resolved";
-        let when = if resolved && inc.resolved_at > 0 {
-            format!(
-                "Opened {} · Resolved {}",
-                rel_time(inc.created_at, now),
-                rel_time(inc.resolved_at, now)
-            )
-        } else {
-            format!("Opened {}", rel_time(inc.created_at, now))
-        };
+    let today = day_bucket(now);
+    for offset in 0..14 {
+        let day = today - offset;
         out.push_str(&format!(
-            r#"<article class="incident{muted}">
+            r#"<div class="day-group"><h3 class="day-group__date">{}</h3>"#,
+            esc(&fmt_date(day * DAY_SECS)),
+        ));
+        let mut count = 0usize;
+        for inc in view
+            .incidents
+            .iter()
+            .filter(|inc| day_bucket(inc.created_at) == day)
+        {
+            count += 1;
+            let resolved = inc.status == "resolved";
+            let mut when = if resolved && inc.resolved_at > 0 {
+                format!(
+                    "Opened {} · Resolved {}",
+                    rel_time(inc.created_at, now),
+                    rel_time(inc.resolved_at, now)
+                )
+            } else {
+                format!("Opened {}", rel_time(inc.created_at, now))
+            };
+            if resolved && inc.resolved_at > 0 {
+                when.push_str(&format!(
+                    " · lasted {}",
+                    fmt_countdown(inc.resolved_at - inc.created_at)
+                ));
+            }
+            out.push_str(&format!(
+                r#"<article class="incident{muted}">
   <div class="incident__head"><h3 class="incident__title">{title}</h3><span class="incident__pills">{sev_pill}{status_pill}</span></div>
   <p class="incident__body">{body}</p>
   <div class="incident__time">{when}</div>
 </article>"#,
-            muted = if resolved { " incident--resolved" } else { "" },
-            title = esc(&inc.title),
-            sev_pill = severity_pill(&inc.severity),
-            status_pill = incident_status_pill(&inc.status),
-            body = esc(&inc.body),
-            when = esc(&when),
-        ));
+                muted = if resolved { " incident--resolved" } else { "" },
+                title = esc(&inc.title),
+                sev_pill = severity_pill(&inc.severity),
+                status_pill = incident_status_pill(&inc.status),
+                body = esc(&inc.body),
+                when = esc(&when),
+            ));
+        }
+        if count == 0 {
+            out.push_str(r#"<p class="day-group__none">No incidents reported.</p>"#);
+        }
+        out.push_str("</div>");
     }
-    out.push_str("</div>");
     out
 }
