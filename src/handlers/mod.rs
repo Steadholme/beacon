@@ -3,9 +3,7 @@
 //! `health` is the unauthenticated liveness probe; `status` carries the PUBLIC status page
 //! and JSON API; `admin` carries the SSO-gated operator dashboard + incident posting.
 //!
-//! The shared design tokens / CSS are embedded (via `include_str!`) and inlined into every
-//! page, matching the HOLDFAST enterprise brand (the same look as the Keystone login UI):
-//! brand gradient, indigo accent, status pills, cards, app-bar.
+//! Odyssey canonical CSS plus Beacon service CSS are embedded and inlined into every page.
 
 pub mod admin;
 pub mod feed;
@@ -13,8 +11,24 @@ pub mod health;
 pub mod status;
 pub mod subscriptions;
 
+use std::sync::OnceLock;
+
+/// Beacon-only CSS layered after Odyssey's canonical font, tokens, and components.
+pub const SERVICE_CSS: &str = include_str!("../../static/service.css");
+
+static APP_CSS: OnceLock<String> = OnceLock::new();
+
 /// Embedded design system, inlined into each rendered page's `<style>`.
-pub const APP_CSS: &str = include_str!("../../static/app.css");
+pub fn app_css() -> &'static str {
+    APP_CSS
+        .get_or_init(|| {
+            let mut css = String::with_capacity(odyssey::APP_CSS.len() + SERVICE_CSS.len());
+            css.push_str(odyssey::APP_CSS);
+            css.push_str(SERVICE_CSS);
+            css
+        })
+        .as_str()
+}
 
 /// The HOLDFAST shield glyph (small, for the app-bar brand lockup).
 pub const SHIELD_SVG: &str = r##"<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="hf-shield-sm" x1="8" y1="4" x2="40" y2="44" gradientUnits="userSpaceOnUse"><stop stop-color="#818CF8"/><stop offset="1" stop-color="#4F46E5"/></linearGradient></defs><path d="M24 4 8 9.5V22c0 11 7 17.4 16 21.5C33 39.4 40 33 40 22V9.5L24 4Z" fill="url(#hf-shield-sm)"/><rect x="20" y="19" width="8" height="13" rx="1" fill="#fff" fill-opacity="0.92"/><path d="M20 19v-2.5a4 4 0 0 1 8 0V19" stroke="#fff" stroke-width="2" stroke-opacity="0.92" fill="none"/></svg>"##;
@@ -209,7 +223,7 @@ pub fn page_shell(title: &str, inner: &str) -> String {
             "</body>\n</html>\n",
         ),
         title = esc(title),
-        css = APP_CSS,
+        css = app_css(),
         shield = SHIELD_SVG,
         userbox = userbox("System Status", None),
         inner = inner,

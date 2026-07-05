@@ -11,8 +11,8 @@ use axum::response::Html;
 use axum::Json;
 
 use crate::handlers::{
-    esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, incident_status_pill, rel_time,
-    severity_pill, status_label, status_pill, userbox, APP_CSS, SHIELD_SVG,
+    app_css, esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, incident_status_pill,
+    rel_time, severity_pill, status_label, status_pill, userbox, SHIELD_SVG,
 };
 use crate::model::{
     affected_names, build_status, day_bucket, group_rollup, maintenance_ongoing, ComponentView,
@@ -38,7 +38,7 @@ pub async fn api_status(State(state): State<AppState>) -> Json<StatusView> {
 
 fn render_status(view: &StatusView, now: i64) -> String {
     STATUS_HTML
-        .replace("{{CSS}}", APP_CSS)
+        .replace("{{CSS}}", app_css())
         .replace("{{SHIELD}}", SHIELD_SVG)
         .replace("{{USERBOX}}", &userbox("System Status", None))
         .replace("{{BANNER}}", &render_hero(view, now))

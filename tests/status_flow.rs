@@ -75,7 +75,7 @@ async fn public_status_renders_without_auth() {
     // No data yet -> nominal banner, no active-incident section, no maintenance section.
     assert!(html.contains("All systems operational"));
     assert!(
-        !html.contains("status-hero__uptime"),
+        !html.contains(r#"<span class="status-hero__uptime""#),
         "no nominal 90d average before first check"
     );
     assert!(!html.contains("Active incidents"));
@@ -86,7 +86,10 @@ async fn public_status_renders_without_auth() {
     assert!(html
         .contains(r##"<a class="updates-pop__item" href="#subscribe">Webhook notifications</a>"##));
     // Inlined CSS (embedded design system).
-    assert!(html.contains("--accent: #546be7"), "design tokens inlined");
+    assert!(
+        html.contains("--accent:var(--c-indigo-600)"),
+        "Odyssey design tokens inlined"
+    );
     // 90-day bars render one span per day per component: 3 components x 90 days, all
     // unknown (no probe data yet).
     assert_eq!(html.matches(r#"class="bar bar-unknown""#).count(), 270);

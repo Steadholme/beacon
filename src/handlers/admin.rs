@@ -15,8 +15,8 @@ use serde::Deserialize;
 use crate::auth;
 use crate::error::AppError;
 use crate::handlers::{
-    esc, fmt_countdown, fmt_datetime, incident_status_pill, rel_time, severity_pill, status_pill,
-    userbox, APP_CSS, SHIELD_SVG,
+    app_css, esc, fmt_countdown, fmt_datetime, incident_status_pill, rel_time, severity_pill,
+    status_pill, userbox, SHIELD_SVG,
 };
 use crate::model::{affected_names, maintenance_ongoing};
 use crate::notify;
@@ -422,7 +422,7 @@ fn render_template_buttons() -> String {
 
 async fn render_admin(state: &AppState, email: &str, csrf: &str, now: i64) -> String {
     ADMIN_HTML
-        .replace("{{CSS}}", APP_CSS)
+        .replace("{{CSS}}", app_css())
         .replace("{{SHIELD}}", SHIELD_SVG)
         .replace("{{USERBOX}}", &userbox("Beacon admin", Some(email)))
         .replace("{{EMAIL}}", &esc(email))
