@@ -13,6 +13,8 @@ pub mod subscriptions;
 
 use std::sync::OnceLock;
 
+use axum::http::HeaderMap;
+
 /// Beacon-only CSS layered after Odyssey's canonical font, tokens, and components.
 pub const SERVICE_CSS: &str = include_str!("../../static/service.css");
 
@@ -201,32 +203,41 @@ pub fn fmt_countdown(secs_until: i64) -> String {
     }
 }
 
-/// Wrap `inner` HTML in the standard HOLDFAST chrome (top-bar + centered console + footer),
-/// inlining the embedded design system. Used by the standalone public subscription notices;
-/// `title` is the page `<title>` + top-bar title (already trusted/static text).
-pub fn page_shell(title: &str, inner: &str) -> String {
-    format!(
-        concat!(
-            "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n",
-            "<meta charset=\"utf-8\">\n",
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
-            "<meta name=\"color-scheme\" content=\"light\">\n",
-            "<title>{title} · HOLDFAST</title>\n<style>{css}</style>\n</head>\n",
-            "<body class=\"page-console\">\n",
-            "<header class=\"topbar\"><div class=\"topbar__inner\">",
-            "<a class=\"brand\" href=\"/status\" aria-label=\"HOLDFAST status home\">",
-            "<span class=\"brand__glyph\" aria-hidden=\"true\">{shield}</span>",
-            "<span class=\"brand__word\">HOLDFAST</span></a>",
-            "<div class=\"topbar__right\">{userbox}</div></div></header>\n",
-            "<main class=\"console\">{inner}</main>\n",
-            "<footer class=\"site-foot\"><span>HOLDFAST · Sovereign infrastructure</span></footer>\n",
-            "</body>\n</html>\n",
-        ),
-        title = esc(title),
-        css = app_css(),
-        shield = SHIELD_SVG,
-        userbox = userbox("System Status", None),
-        inner = inner,
+/// Read a request header as UTF-8 text (`None` when absent or not valid text). Local helper
+/// for deriving the Odyssey locale from the raw `Cookie` / `Accept-Language` header values.
+pub fn hv<'a>(h: &'a HeaderMap, n: &str) -> Option<&'a str> {
+    h.get(n).and_then(|v| v.to_str().ok())
+}
+
+/// Wrap `inner` HTML in the standard HOLDFAST chrome (app-bar + centered console + footer)
+/// via the Odyssey shell layer, so `<html lang>` and the chrome strings follow the resolved
+/// `locale` (i18n pilot). Used by the standalone public subscription notices; `title` is the
+/// page `<title>` (already trusted/static text).
+pub fn page_shell(locale: odyssey::Locale, title: &str, inner: &str) -> String {
+    let full_title = format!("{title} · HOLDFAST");
+    odyssey::page_shell(
+        odyssey::PageChrome {
+            title: &full_title,
+            brand: odyssey::Brand {
+                tile_svg: SHIELD_SVG,
+                accent: "",
+                name: "HOLDFAST",
+                sub: "Status",
+            },
+            nav: &[],
+            user: odyssey::UserBox {
+                email: None,
+                logout_url: LOGOUT_URL,
+            },
+            footer: odyssey::raw("<span>HOLDFAST · Sovereign infrastructure</span>"),
+        },
+        odyssey::raw(inner),
+        odyssey::ShellOpts {
+            extra_css: SERVICE_CSS,
+            body_class: "page-console",
+            locale,
+            ..Default::default()
+        },
     )
 }
 

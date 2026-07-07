@@ -12,12 +12,13 @@
 //! Everything interpolated into the rendered notices is HTML-escaped.
 
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Form;
 use serde::Deserialize;
 
 use crate::auth::new_csrf_token;
-use crate::handlers::{esc, page_shell};
+use crate::handlers::{esc, hv, page_shell};
 use crate::probe::parse_http_url;
 use crate::store::Subscriber;
 use crate::{now_secs, AppState};
@@ -34,11 +35,17 @@ pub struct SubscribeForm {
 /// `POST /subscriptions` — create an UNCONFIRMED webhook subscriber and show its confirm +
 /// unsubscribe links and signing secret. Public (no auth, no CSRF); double opt-in gates
 /// fan-out. Rejects a non-http(s) or over-long target with a 400-style notice.
-pub async fn subscribe(State(state): State<AppState>, Form(form): Form<SubscribeForm>) -> Response {
+pub async fn subscribe(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<SubscribeForm>,
+) -> Response {
+    let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
     let target = form.target.trim();
     // Only http(s) webhooks; validate with the same minimal parser the prober/deliverer use.
     if target.is_empty() || target.len() > MAX_TARGET_LEN || parse_http_url(target).is_none() {
         return Html(page_shell(
+            loc,
             "Subscribe",
             &notice(
                 "Invalid webhook URL",
@@ -82,7 +89,7 @@ pub async fn subscribe(State(state): State<AppState>, Form(form): Form<Subscribe
             unsub = unsub,
         ),
     );
-    Html(page_shell("Subscribe", &inner)).into_response()
+    Html(page_shell(loc, "Subscribe", &inner)).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,7 +100,12 @@ pub struct TokenQuery {
 
 /// `GET /subscriptions/confirm?token=…` — confirm a subscription by its capability token.
 /// Public; an unknown/removed token yields a neutral notice (no enumeration signal).
-pub async fn confirm(State(state): State<AppState>, Query(q): Query<TokenQuery>) -> Response {
+pub async fn confirm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+) -> Response {
+    let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
     let inner = match state.store.get_subscriber(&q.token).await {
         Some(sub) => {
             state.store.confirm_subscriber(&sub.id).await;
@@ -109,12 +121,17 @@ pub async fn confirm(State(state): State<AppState>, Query(q): Query<TokenQuery>)
         }
         None => not_found_notice(),
     };
-    Html(page_shell("Confirm subscription", &inner)).into_response()
+    Html(page_shell(loc, "Confirm subscription", &inner)).into_response()
 }
 
 /// `GET /subscriptions/unsubscribe?token=…` — remove a subscription by its capability token.
 /// Public + idempotent: an unknown/already-removed token yields the same neutral notice.
-pub async fn unsubscribe(State(state): State<AppState>, Query(q): Query<TokenQuery>) -> Response {
+pub async fn unsubscribe(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+) -> Response {
+    let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
     let existed = state.store.get_subscriber(&q.token).await.is_some();
     if existed {
         state.store.delete_subscriber(&q.token).await;
@@ -125,7 +142,7 @@ pub async fn unsubscribe(State(state): State<AppState>, Query(q): Query<TokenQue
         "<p class=\"hint\">You will no longer receive status updates at that endpoint.</p>\
          <p class=\"hint--muted\"><a href=\"/status\">Back to status</a></p>",
     );
-    Html(page_shell("Unsubscribe", &inner)).into_response()
+    Html(page_shell(loc, "Unsubscribe", &inner)).into_response()
 }
 
 /// A single-card notice body for the standalone subscription pages.
