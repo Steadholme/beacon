@@ -18,7 +18,8 @@ pub async fn run_all_once(state: &AppState) {
     for check in checks {
         let state = state.clone();
         handles.push(tokio::spawn(async move {
-            let outcome = probe::probe(&check.kind, &check.target, state.config.probe_timeout).await;
+            let outcome =
+                probe::probe(&check.kind, &check.target, state.config.probe_timeout).await;
             let ts = now_secs();
             state
                 .store
@@ -49,6 +50,9 @@ pub async fn run_monitor(state: AppState) {
     );
     loop {
         run_all_once(&state).await;
+        if let Some(vitals) = &state.vitals {
+            vitals.refresh(state.config.probe_timeout, now_secs()).await;
+        }
         tokio::time::sleep(interval).await;
     }
 }

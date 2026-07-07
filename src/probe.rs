@@ -100,7 +100,7 @@ where
 }
 
 /// Extract the numeric status code from an HTTP status line (`HTTP/1.1 200 OK`).
-fn parse_status_line(buf: &[u8]) -> std::io::Result<u16> {
+pub(crate) fn parse_status_line(buf: &[u8]) -> std::io::Result<u16> {
     let text = String::from_utf8_lossy(buf);
     let line = text.lines().next().unwrap_or("");
     line.split_whitespace()
@@ -136,7 +136,11 @@ pub(crate) fn parse_http_url(url: &str) -> Option<(bool, String, u16, String)> {
     if host.is_empty() {
         return None;
     }
-    let path = if path.is_empty() { "/".to_string() } else { path.to_string() };
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
+    };
     Some((tls, host, port, path))
 }
 
@@ -171,7 +175,12 @@ mod tests {
     fn parse_http_url_variants() {
         assert_eq!(
             parse_http_url("https://sso.w33d.xyz/healthz"),
-            Some((true, "sso.w33d.xyz".to_string(), 443, "/healthz".to_string()))
+            Some((
+                true,
+                "sso.w33d.xyz".to_string(),
+                443,
+                "/healthz".to_string()
+            ))
         );
         assert_eq!(
             parse_http_url("http://keyward:8200/healthz"),
@@ -187,10 +196,7 @@ mod tests {
 
     #[test]
     fn parse_status_line_reads_code() {
-        assert_eq!(
-            parse_status_line(b"HTTP/1.1 200 OK\r\n\r\n").unwrap(),
-            200
-        );
+        assert_eq!(parse_status_line(b"HTTP/1.1 200 OK\r\n\r\n").unwrap(), 200);
         assert_eq!(
             parse_status_line(b"HTTP/1.0 503 Service Unavailable\r\n").unwrap(),
             503

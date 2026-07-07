@@ -360,7 +360,10 @@ impl Store for InMemoryStore {
     }
 
     async fn insert_maintenance(&self, maintenance: &Maintenance) {
-        let mut maintenances = self.maintenances.lock().expect("maintenances lock poisoned");
+        let mut maintenances = self
+            .maintenances
+            .lock()
+            .expect("maintenances lock poisoned");
         if maintenances.iter().any(|m| m.id == maintenance.id) {
             return;
         }
@@ -382,7 +385,9 @@ impl Store for InMemoryStore {
         let mut buckets: HashMap<(String, i64), (i64, i64)> = HashMap::new();
         for r in self.results.lock().expect("results lock poisoned").iter() {
             if r.ts >= since_ts {
-                let entry = buckets.entry((r.name.clone(), r.ts / 86_400)).or_insert((0, 0));
+                let entry = buckets
+                    .entry((r.name.clone(), r.ts / 86_400))
+                    .or_insert((0, 0));
                 entry.0 += 1;
                 if r.ok {
                     entry.1 += 1;
@@ -409,7 +414,9 @@ impl Store for InMemoryStore {
         let mut buckets: HashMap<(String, i64), (i64, i64)> = HashMap::new();
         for r in self.results.lock().expect("results lock poisoned").iter() {
             if r.ts >= since_ts {
-                let entry = buckets.entry((r.name.clone(), r.ts / width)).or_insert((0, 0));
+                let entry = buckets
+                    .entry((r.name.clone(), r.ts / width))
+                    .or_insert((0, 0));
                 entry.0 += r.latency_ms;
                 entry.1 += 1;
             }
@@ -428,7 +435,10 @@ impl Store for InMemoryStore {
     }
 
     async fn insert_component_group(&self, group: &ComponentGroup) {
-        let mut groups = self.component_groups.lock().expect("component_groups lock poisoned");
+        let mut groups = self
+            .component_groups
+            .lock()
+            .expect("component_groups lock poisoned");
         if groups.iter().any(|g| g.id == group.id) {
             return;
         }
@@ -915,7 +925,7 @@ impl PgStore {
         let width = bucket_secs.max(1);
         let rows = sqlx::query(
             "SELECT name, ts / $2 AS bucket, \
-                    COALESCE(SUM(latency_ms), 0) AS sum_latency, COUNT(*) AS n \
+                    CAST(COALESCE(SUM(latency_ms), 0) AS BIGINT) AS sum_latency, COUNT(*) AS n \
              FROM check_results WHERE ts >= $1 \
              GROUP BY name, ts / $2 ORDER BY name, bucket",
         )
@@ -949,11 +959,10 @@ impl PgStore {
     }
 
     async fn list_component_groups_async(&self) -> Result<Vec<ComponentGroup>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, name, position FROM component_groups ORDER BY position, name",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT id, name, position FROM component_groups ORDER BY position, name")
+                .fetch_all(&self.pool)
+                .await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
             out.push(ComponentGroup {
@@ -1130,10 +1139,12 @@ impl Store for PgStore {
     }
 
     async fn list_incident_updates(&self) -> Vec<IncidentUpdate> {
-        self.list_incident_updates_async().await.unwrap_or_else(|e| {
-            tracing::error!(error = %e, "pg list_incident_updates failed");
-            Vec::new()
-        })
+        self.list_incident_updates_async()
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, "pg list_incident_updates failed");
+                Vec::new()
+            })
     }
 
     async fn insert_maintenance(&self, maintenance: &Maintenance) {
@@ -1172,10 +1183,12 @@ impl Store for PgStore {
     }
 
     async fn list_component_groups(&self) -> Vec<ComponentGroup> {
-        self.list_component_groups_async().await.unwrap_or_else(|e| {
-            tracing::error!(error = %e, "pg list_component_groups failed");
-            Vec::new()
-        })
+        self.list_component_groups_async()
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, "pg list_component_groups failed");
+                Vec::new()
+            })
     }
 
     async fn set_check_group(&self, name: &str, group_id: Option<&str>) {

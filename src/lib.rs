@@ -25,11 +25,13 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod handlers;
+pub mod i18n;
 pub mod model;
 pub mod monitor;
 pub mod notify;
 pub mod probe;
 pub mod store;
+pub mod vitals;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -45,6 +47,7 @@ use crate::store::{Check, InMemoryStore, PgStore, Store};
 pub struct AppState {
     pub config: Arc<Config>,
     pub store: Arc<dyn Store>,
+    pub vitals: Option<Arc<vitals::VitalsHandle>>,
 }
 
 /// Build the router wiring all endpoints onto `state`.
@@ -104,9 +107,14 @@ pub fn app(state: AppState) -> Router {
 pub async fn state_with(config: Config) -> AppState {
     let store = Arc::new(InMemoryStore::new());
     seed_if_empty(store.as_ref(), &config.seed).await;
+    let vitals = config
+        .vitals_url
+        .as_ref()
+        .map(|u| Arc::new(vitals::VitalsHandle::new(u.clone())));
     AppState {
         config: Arc::new(config),
         store,
+        vitals,
     }
 }
 
@@ -142,14 +150,24 @@ pub async fn build_state_from_env() -> Result<AppState, String> {
             Arc::new(pg)
         }
         "memory" => Arc::new(InMemoryStore::new()),
-        other => return Err(format!("unknown BEACON_STORE={other} (use memory|postgres)")),
+        other => {
+            return Err(format!(
+                "unknown BEACON_STORE={other} (use memory|postgres)"
+            ))
+        }
     };
 
     seed_if_empty(store.as_ref(), &config.seed).await;
 
+    let vitals = config
+        .vitals_url
+        .as_ref()
+        .map(|u| Arc::new(vitals::VitalsHandle::new(u.clone())));
+
     Ok(AppState {
         config: Arc::new(config),
         store,
+        vitals,
     })
 }
 

@@ -25,23 +25,34 @@
       <h1>Beacon admin</h1>
       <p class="sub">Signed in as {{EMAIL}}. Monitored checks and incident control.</p>
     </div>
+    {{SUMMARY}}
+    {{ADMINNAV}}
 
     <div class="card-stack">
-      <section class="card">
+      <section class="card" id="checks">
         <div class="card__head"><h2>Monitored checks</h2></div>
         <div class="card__body">
+          <div class="bc-scroll">
           <table class="table">
             <thead>
-              <tr><th>Component</th><th>Kind</th><th>Target</th><th>Current</th></tr>
+              <tr><th>Component</th><th>Kind</th><th>Target</th><th>Current</th><th>Latency</th></tr>
             </thead>
             <tbody>
               {{CHECKS}}
             </tbody>
           </table>
+          </div>
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="infra">
+        <div class="card__head card__head--split"><h2>Infrastructure</h2><span class="card__head-meta bc-infra__meta">{{INFRA_META}}</span></div>
+        <div class="card__body">
+          {{INFRA}}
+        </div>
+      </section>
+
+      <section class="card" id="post-incident">
         <div class="card__head"><h2>Post an incident</h2></div>
         <div class="card__body">
           <form method="post" action="/admin/incidents">
@@ -50,6 +61,7 @@
               <label for="title">Title</label>
               <input type="text" id="title" name="title" required placeholder="e.g. Identity provider degraded">
             </div>
+            <div class="bc-formrow">
             <div class="field">
               <label for="status">Status</label>
               <select id="status" name="status">
@@ -67,6 +79,7 @@
                 <option value="critical">Critical</option>
               </select>
             </div>
+            </div>
             <div class="field">
               <label for="affected">Affected components</label>
               <input type="text" id="affected" name="affected" placeholder="Comma-separated component names, e.g. Gateway, Identity">
@@ -81,14 +94,14 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="bc-incidents">
         <div class="card__head"><h2>Recent incidents</h2></div>
         <div class="card__body">
           {{INCIDENTS}}
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="maintenance">
         <div class="card__head"><h2>Schedule maintenance</h2></div>
         <div class="card__body">
           <form method="post" action="/admin/maintenances">
@@ -101,6 +114,7 @@
               <label for="m-body">Details</label>
               <textarea id="m-body" name="body" placeholder="What is being maintained and expected impact."></textarea>
             </div>
+            <div class="bc-formrow">
             <div class="field">
               <label for="m-starts">Starts in (minutes, 0 = now)</label>
               <input type="text" id="m-starts" name="starts_in_mins" value="0">
@@ -108,6 +122,7 @@
             <div class="field">
               <label for="m-duration">Duration (minutes)</label>
               <input type="text" id="m-duration" name="duration_mins" value="60">
+            </div>
             </div>
             <div class="field">
               <label for="m-affected">Affected components</label>
@@ -118,21 +133,21 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="maintenances">
         <div class="card__head"><h2>Maintenance windows</h2></div>
         <div class="card__body">
           {{MAINTENANCES}}
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="bc-groups">
         <div class="card__head"><h2>Component groups</h2></div>
         <div class="card__body">
           {{GROUPS}}
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="subscribers">
         <div class="card__head"><h2>Status subscribers</h2></div>
         <div class="card__body">
           {{SUBSCRIBERS}}
@@ -152,5 +167,6 @@
       if (ta) { ta.value = btn.getAttribute('data-tpl'); ta.focus(); }
     });
   </script>
+  {{SCRIPTS}}
 </body>
 </html>

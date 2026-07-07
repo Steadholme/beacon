@@ -19,6 +19,7 @@ use axum::http::HeaderMap;
 pub const SERVICE_CSS: &str = include_str!("../../static/service.css");
 
 static APP_CSS: OnceLock<String> = OnceLock::new();
+static DYNAMIC_JS: OnceLock<String> = OnceLock::new();
 
 /// Embedded design system, inlined into each rendered page's `<style>`.
 pub fn app_css() -> &'static str {
@@ -29,6 +30,13 @@ pub fn app_css() -> &'static str {
             css.push_str(SERVICE_CSS);
             css
         })
+        .as_str()
+}
+
+/// Embedded Odyssey dynamic layer for admin-only progressive enhancement.
+pub fn dynamic_js() -> &'static str {
+    DYNAMIC_JS
+        .get_or_init(|| odyssey::dynamic_scripts().0)
         .as_str()
 }
 

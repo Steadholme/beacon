@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use serde::Serialize;
 
 use crate::store::{ComponentGroup, Incident, IncidentUpdate, Maintenance, Store};
+use crate::vitals;
 
 /// Rolling-uptime windows, in seconds.
 pub const WINDOW_24H: i64 = 86_400;
@@ -151,6 +152,8 @@ pub struct GroupView {
 pub struct StatusView {
     pub overall: &'static str,
     pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub infra: Option<vitals::InfraPublic>,
     pub components: Vec<ComponentView>,
     /// Component groups (sections), ordered by position then name. Empty when none configured
     /// — the page then renders the flat component list exactly as before.
@@ -280,7 +283,11 @@ pub fn build_latency_points(
     let current = now / width;
     let mut points = Vec::with_capacity(num as usize);
     for b in (current - num + 1)..=current {
-        points.push(buckets.get(&b).and_then(|&(sum, count)| latency_avg(sum, count)));
+        points.push(
+            buckets
+                .get(&b)
+                .and_then(|&(sum, count)| latency_avg(sum, count)),
+        );
     }
     points
 }
@@ -319,7 +326,10 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
     // The response-time sparkline grid for EVERY component in ONE aggregate query, keyed
     // (name, hour-bucket) -> (sum_latency, count).
     let mut latency: HashMap<String, HashMap<i64, (i64, i64)>> = HashMap::new();
-    for row in store.latency_series(now - WINDOW_SPARK, SPARK_BUCKET_SECS).await {
+    for row in store
+        .latency_series(now - WINDOW_SPARK, SPARK_BUCKET_SECS)
+        .await
+    {
         latency
             .entry(row.name)
             .or_default()
@@ -348,7 +358,10 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
             overall = status;
         }
         if let Some(gid) = &check.group_id {
-            group_members.entry(gid.clone()).or_default().push(status.as_str());
+            group_members
+                .entry(gid.clone())
+                .or_default()
+                .push(status.as_str());
         }
 
         // Window-mean latency: total sum / total count across this component's hour buckets.
@@ -368,7 +381,12 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
             latency_avg_ms: latency_avg(lat_sum, lat_count),
             last_checked: latest.as_ref().map(|r| r.ts),
             days: build_days(daily.get(&check.name).unwrap_or(&empty_days), today),
-            latency_points: build_latency_points(comp_latency, now, SPARK_BUCKET_SECS, SPARK_BUCKETS),
+            latency_points: build_latency_points(
+                comp_latency,
+                now,
+                SPARK_BUCKET_SECS,
+                SPARK_BUCKETS,
+            ),
             group_id: check.group_id.clone(),
         });
     }
@@ -410,12 +428,16 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
     StatusView {
         overall: overall.as_str(),
         updated_at: now,
+        infra: None,
         components,
         groups,
         incidents,
         updates: store.list_incident_updates().await,
         // Only upcoming/ongoing windows are public surface (ended ones drop off).
-        maintenances: maintenances.into_iter().filter(|m| m.ends_at > now).collect(),
+        maintenances: maintenances
+            .into_iter()
+            .filter(|m| m.ends_at > now)
+            .collect(),
     }
 }
 
@@ -520,7 +542,10 @@ mod tests {
         assert_eq!(group_rollup(&["operational", "maintenance"]), "maintenance");
         assert_eq!(group_rollup(&["maintenance", "degraded"]), "degraded");
         assert_eq!(group_rollup(&["degraded", "down"]), "down");
-        assert_eq!(group_rollup(&["operational", "degraded", "maintenance"]), "degraded");
+        assert_eq!(
+            group_rollup(&["operational", "degraded", "maintenance"]),
+            "degraded"
+        );
         // Unknown tokens are treated as nominal, never dragging the pill down.
         assert_eq!(group_rollup(&["operational", "bogus"]), "operational");
     }
@@ -546,8 +571,16 @@ mod tests {
         assert_eq!(points.len(), SPARK_BUCKETS as usize);
         // Oldest first: last three entries are [h-2, h-1, h].
         assert_eq!(points[SPARK_BUCKETS as usize - 1], Some(20), "current hour");
-        assert_eq!(points[SPARK_BUCKETS as usize - 2], None, "empty hour is a gap");
-        assert_eq!(points[SPARK_BUCKETS as usize - 3], Some(30), "two hours ago");
+        assert_eq!(
+            points[SPARK_BUCKETS as usize - 2],
+            None,
+            "empty hour is a gap"
+        );
+        assert_eq!(
+            points[SPARK_BUCKETS as usize - 3],
+            Some(30),
+            "two hours ago"
+        );
         assert_eq!(points[0], None, "oldest hour had no probes");
     }
 

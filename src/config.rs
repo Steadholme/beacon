@@ -24,6 +24,8 @@ pub struct Config {
     pub check_interval: Duration,
     /// Per-probe connect/response timeout (`PROBE_TIMEOUT`, seconds).
     pub probe_timeout: Duration,
+    /// Internal vitals service base URL (`VITALS_URL`), disabled when unset.
+    pub vitals_url: Option<String>,
     /// Checks seeded into an EMPTY checks table on first boot (`BEACON_SEED` JSON, else the
     /// built-in HOLDFAST default seed).
     pub seed: Vec<Check>,
@@ -36,6 +38,7 @@ impl Config {
             bind_addr: DEFAULT_BIND_ADDR.to_string(),
             check_interval: Duration::from_secs(DEFAULT_CHECK_INTERVAL_SECS),
             probe_timeout: Duration::from_secs(DEFAULT_PROBE_TIMEOUT_SECS),
+            vitals_url: None,
             seed: default_seed(),
         }
     }
@@ -52,11 +55,14 @@ impl Config {
         if let Some(v) = env_nonempty("PROBE_TIMEOUT").and_then(|v| v.parse::<u64>().ok()) {
             config.probe_timeout = Duration::from_secs(v.max(1));
         }
+        config.vitals_url = env_nonempty("VITALS_URL");
         if let Some(raw) = env_nonempty("BEACON_SEED") {
             match parse_seed(&raw) {
                 Ok(checks) if !checks.is_empty() => config.seed = checks,
                 Ok(_) => tracing::warn!("BEACON_SEED parsed to an empty list — using default seed"),
-                Err(e) => tracing::warn!(error = %e, "BEACON_SEED is not valid JSON — using default seed"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "BEACON_SEED is not valid JSON — using default seed")
+                }
             }
         }
         config
