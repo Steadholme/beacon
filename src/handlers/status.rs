@@ -13,7 +13,7 @@ use axum::Json;
 
 use crate::handlers::{
     app_css, esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, hv, incident_status_pill,
-    rel_time, severity_pill, userbox, SHIELD_SVG,
+    rel_time, render_theme_switch, severity_pill, userbox, SHIELD_SVG,
 };
 use crate::i18n;
 use crate::model::{
@@ -29,9 +29,10 @@ const STATUS_HTML: &str = include_str!("../../templates/status.html");
 pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
     let now = now_secs();
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
+    let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
     let mut view = build_status(state.store.as_ref(), now).await;
     attach_infra(&mut view, &state, now);
-    Html(render_status(&view, now, loc))
+    Html(render_status(&view, now, loc, theme))
 }
 
 /// `GET /api/status` — the public machine-readable status snapshot (no auth).
@@ -188,12 +189,15 @@ fn severity_pill_l(loc: odyssey::Locale, severity: &str) -> String {
     )
 }
 
-fn render_status(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
+fn render_status(view: &StatusView, now: i64, loc: odyssey::Locale, theme: &str) -> String {
     let updated = rel_time_l(loc, view.updated_at, now);
     STATUS_HTML
         .replace("{{CSS}}", app_css())
         .replace("{{LANG}}", loc.bcp47())
+        .replace("{{THEME}}", odyssey::html_theme_attr(theme))
+        .replace("{{COLOR_SCHEME}}", odyssey::color_scheme_meta(theme))
         .replace("{{SHIELD}}", SHIELD_SVG)
+        .replace("{{THEMESWITCH}}", &render_theme_switch(theme))
         .replace("{{USERBOX}}", &userbox(i18n::t(loc, "status.topbar"), None))
         .replace("{{LANGSWITCH}}", &render_lang_switch(loc))
         .replace("{{STATUS_TITLE}}", i18n::t(loc, "status.title"))

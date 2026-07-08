@@ -41,11 +41,13 @@ pub async fn subscribe(
     Form(form): Form<SubscribeForm>,
 ) -> Response {
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
+    let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
     let target = form.target.trim();
     // Only http(s) webhooks; validate with the same minimal parser the prober/deliverer use.
     if target.is_empty() || target.len() > MAX_TARGET_LEN || parse_http_url(target).is_none() {
         return Html(page_shell(
             loc,
+            theme,
             "Subscribe",
             &notice(
                 "Invalid webhook URL",
@@ -89,7 +91,7 @@ pub async fn subscribe(
             unsub = unsub,
         ),
     );
-    Html(page_shell(loc, "Subscribe", &inner)).into_response()
+    Html(page_shell(loc, theme, "Subscribe", &inner)).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,6 +108,7 @@ pub async fn confirm(
     Query(q): Query<TokenQuery>,
 ) -> Response {
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
+    let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
     let inner = match state.store.get_subscriber(&q.token).await {
         Some(sub) => {
             state.store.confirm_subscriber(&sub.id).await;
@@ -121,7 +124,7 @@ pub async fn confirm(
         }
         None => not_found_notice(),
     };
-    Html(page_shell(loc, "Confirm subscription", &inner)).into_response()
+    Html(page_shell(loc, theme, "Confirm subscription", &inner)).into_response()
 }
 
 /// `GET /subscriptions/unsubscribe?token=…` — remove a subscription by its capability token.
@@ -132,6 +135,7 @@ pub async fn unsubscribe(
     Query(q): Query<TokenQuery>,
 ) -> Response {
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
+    let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
     let existed = state.store.get_subscriber(&q.token).await.is_some();
     if existed {
         state.store.delete_subscriber(&q.token).await;
@@ -142,7 +146,7 @@ pub async fn unsubscribe(
         "<p class=\"hint\">You will no longer receive status updates at that endpoint.</p>\
          <p class=\"hint--muted\"><a href=\"/status\">Back to status</a></p>",
     );
-    Html(page_shell(loc, "Unsubscribe", &inner)).into_response()
+    Html(page_shell(loc, theme, "Unsubscribe", &inner)).into_response()
 }
 
 /// A single-card notice body for the standalone subscription pages.

@@ -15,8 +15,8 @@ use serde::Deserialize;
 use crate::auth;
 use crate::error::AppError;
 use crate::handlers::{
-    app_css, dynamic_js, esc, fmt_countdown, fmt_datetime, fmt_latency, incident_status_pill,
-    rel_time, severity_pill, status_pill, userbox, SHIELD_SVG,
+    app_css, dynamic_js, esc, fmt_countdown, fmt_datetime, fmt_latency, hv, incident_status_pill,
+    rel_time, render_theme_switch, severity_pill, status_pill, userbox, SHIELD_SVG,
 };
 use crate::model::{affected_names, maintenance_ongoing};
 use crate::notify;
@@ -55,8 +55,12 @@ fn normalize_affected(raw: &str) -> String {
 pub async fn admin_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let email = auth::admin_email(&headers).unwrap_or_else(|| "operator".to_string());
     let (csrf, set_cookie) = auth::ensure_csrf(&headers);
+    let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
     let now = now_secs();
-    html_with_cookie(render_admin(&state, &email, &csrf, now).await, set_cookie)
+    html_with_cookie(
+        render_admin(&state, &email, &csrf, now, theme).await,
+        set_cookie,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -460,11 +464,20 @@ fn render_template_buttons() -> String {
 // Rendering
 // ---------------------------------------------------------------------------
 
-async fn render_admin(state: &AppState, email: &str, csrf: &str, now: i64) -> String {
+async fn render_admin(
+    state: &AppState,
+    email: &str,
+    csrf: &str,
+    now: i64,
+    theme: &str,
+) -> String {
     let vitals = state.vitals.as_ref().and_then(|v| v.snapshot());
     ADMIN_HTML
         .replace("{{CSS}}", app_css())
+        .replace("{{THEME}}", odyssey::html_theme_attr(theme))
+        .replace("{{COLOR_SCHEME}}", odyssey::color_scheme_meta(theme))
         .replace("{{SHIELD}}", SHIELD_SVG)
+        .replace("{{THEMESWITCH}}", &render_theme_switch(theme))
         .replace("{{USERBOX}}", &userbox("Beacon admin", Some(email)))
         .replace("{{EMAIL}}", &esc(email))
         .replace("{{SUMMARY}}", &render_summary(state, now).await)

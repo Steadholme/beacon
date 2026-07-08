@@ -85,6 +85,47 @@ pub fn userbox(title: &str, email: Option<&str>) -> String {
     )
 }
 
+/// The estate theme switcher (Light / Dark / System) — shared app-bar chrome for the bespoke
+/// status + admin shells (the Odyssey `page_shell` path renders its own). Pure SSR `<a href>`
+/// toggles to the gateway-owned `/_gw/theme?to=…` endpoint, which sets the display-only
+/// `__Secure-theme` cookie (Domain=.w33d.xyz, OUTSIDE the gateway HMAC — it repaints, never forges
+/// identity). Mirrors Odyssey's `.themeswitch` markup; the current `theme`
+/// (`"light" | "dark" | "auto"`) is marked active. Zero JS.
+pub fn render_theme_switch(theme: &str) -> String {
+    let opt = |val: &str| -> (&'static str, &'static str) {
+        if theme == val {
+            (" is-active", " aria-current=\"true\"")
+        } else {
+            ("", "")
+        }
+    };
+    let (l, lc) = opt("light");
+    let (d, dc) = opt("dark");
+    let (a, ac) = opt("auto");
+    format!(
+        concat!(
+            "<div class=\"themeswitch\" role=\"group\" aria-label=\"Theme\">",
+            "<a class=\"themeswitch__opt{l}\" href=\"/_gw/theme?to=light\" title=\"Light\" aria-label=\"Light\"{lc}>",
+            "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">",
+            "<circle cx=\"12\" cy=\"12\" r=\"4\"/>",
+            "<path d=\"M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4\"/></svg></a>",
+            "<a class=\"themeswitch__opt{d}\" href=\"/_gw/theme?to=dark\" title=\"Dark\" aria-label=\"Dark\"{dc}>",
+            "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">",
+            "<path d=\"M12 3a6.5 6.5 0 0 0 9 9 9 9 0 1 1-9-9Z\"/></svg></a>",
+            "<a class=\"themeswitch__opt{a}\" href=\"/_gw/theme?to=auto\" title=\"System\" aria-label=\"System\"{ac}>",
+            "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">",
+            "<rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M8 21h8M12 17v4\"/></svg></a>",
+            "</div>",
+        ),
+        l = l,
+        lc = lc,
+        d = d,
+        dc = dc,
+        a = a,
+        ac = ac,
+    )
+}
+
 /// Minimal HTML escaping for text/attribute interpolation.
 pub fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -221,7 +262,12 @@ pub fn hv<'a>(h: &'a HeaderMap, n: &str) -> Option<&'a str> {
 /// via the Odyssey shell layer, so `<html lang>` and the chrome strings follow the resolved
 /// `locale` (i18n pilot). Used by the standalone public subscription notices; `title` is the
 /// page `<title>` (already trusted/static text).
-pub fn page_shell(locale: odyssey::Locale, title: &str, inner: &str) -> String {
+pub fn page_shell(
+    locale: odyssey::Locale,
+    theme: &'static str,
+    title: &str,
+    inner: &str,
+) -> String {
     let full_title = format!("{title} · HOLDFAST");
     odyssey::page_shell(
         odyssey::PageChrome {
@@ -244,6 +290,7 @@ pub fn page_shell(locale: odyssey::Locale, title: &str, inner: &str) -> String {
             extra_css: SERVICE_CSS,
             body_class: "page-console",
             locale,
+            theme,
             ..Default::default()
         },
     )
