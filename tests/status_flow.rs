@@ -87,8 +87,10 @@ async fn public_status_renders_without_auth() {
         .contains(r##"<a class="updates-pop__item" href="#subscribe">Webhook notifications</a>"##));
     // Inlined CSS (embedded design system).
     assert!(
-        html.contains("--accent:var(--c-indigo-600)"),
-        "Odyssey design tokens inlined"
+        html.contains("--accent:var(--c-oxide-600)")
+            && html.contains("--surface-etched:")
+            && html.contains("background-size:48px 48px"),
+        "current Odyssey Sovereign Atlas tokens and material are inlined"
     );
     // 90-day bars render one span per day per component: 3 components x 90 days, all
     // unknown (no probe data yet).
