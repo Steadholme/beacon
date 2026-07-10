@@ -49,18 +49,22 @@ fn normalize_affected(raw: &str) -> String {
     affected_names(raw).join(", ")
 }
 
-/// `GET /admin` — operator dashboard (checks + incident/maintenance control). Renders for
-/// any request the gateway forwards; the signed-in email comes from the injected
-/// `X-Auth-Email`. Mints/reuses the CSRF token its forms embed.
-pub async fn admin_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// `GET /admin` — operator dashboard (checks + incident/maintenance control). Requires the
+/// gateway-injected subject even when an ingress route is accidentally broader than intended;
+/// the signed-in email comes from `X-Auth-Email`. Mints/reuses the CSRF token its forms embed.
+pub async fn admin_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    auth::require_admin(&headers)?;
     let email = auth::admin_email(&headers).unwrap_or_else(|| "operator".to_string());
     let (csrf, set_cookie) = auth::ensure_csrf(&headers);
     let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
     let now = now_secs();
-    html_with_cookie(
+    Ok(html_with_cookie(
         render_admin(&state, &email, &csrf, now, theme).await,
         set_cookie,
-    )
+    ))
 }
 
 // ---------------------------------------------------------------------------

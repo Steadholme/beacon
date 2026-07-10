@@ -475,6 +475,7 @@ async fn admin_page_renders_with_email() {
     let state = build_dev_state().await;
     let req = Request::builder()
         .uri("/admin")
+        .header("x-auth-subject", "u_admin")
         .header("x-auth-email", "ops@holdfast.local")
         .body(Body::empty())
         .unwrap();
@@ -525,6 +526,16 @@ async fn admin_page_renders_with_email() {
         html.contains(token),
         "hidden field carries the cookie token"
     );
+}
+
+#[tokio::test]
+async fn admin_page_rejects_anonymous_reads() {
+    let state = build_dev_state().await;
+    let (status, body) = call(&state, get("/admin")).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(!text(&body).contains("Post an incident"));
+    assert!(!text(&body).contains("Status subscribers"));
 }
 
 #[tokio::test]

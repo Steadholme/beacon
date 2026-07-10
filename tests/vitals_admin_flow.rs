@@ -21,6 +21,7 @@ async fn call(state: &AppState, req: Request<Body>) -> (StatusCode, Vec<u8>) {
 fn admin_get() -> Request<Body> {
     Request::builder()
         .uri("/admin")
+        .header("x-auth-subject", "u_admin")
         .header("x-auth-email", "ops@holdfast.local")
         .body(Body::empty())
         .unwrap()
