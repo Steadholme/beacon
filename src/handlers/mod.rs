@@ -33,7 +33,10 @@ pub fn app_css() -> &'static str {
         .as_str()
 }
 
-/// Embedded Odyssey dynamic layer for admin-only progressive enhancement.
+/// Embedded Odyssey dynamic layer for progressively enhanced public and admin surfaces.
+///
+/// Wire only follows same-origin URLs declared in server-rendered markup. Individual handlers
+/// still own their HTTP method, authorization, and response-shape contracts.
 pub fn dynamic_js() -> &'static str {
     DYNAMIC_JS
         .get_or_init(|| odyssey::dynamic_scripts().0)

@@ -3,10 +3,15 @@ pub const APP_CSS: &str = concat!(
     include_str!("../css/font.css"),
     include_str!("../css/tokens.css"),
     include_str!("../css/components.css"),
-    include_str!("../css/motion.css")
+    include_str!("../css/motion.css"),
+    include_str!("../css/profile.css")
 );
 pub const WIRE_JS: &str = include_str!("../js/wire.js");
 pub const SPARK_JS: &str = include_str!("../js/spark.js");
+/// Public Odyssey 1.2 canary enhancer. It is network-free and remains separate from the internal
+/// Wire/Spark runtime so applications opt into the public shell contract explicitly.
+pub const CANARY_JS: &str = include_str!("../js/canary.js");
+pub const PROFILE_CSS: &str = include_str!("../css/profile.css");
 /// W8 motion helper (same-document View Transition wrapper + FLIP list animator). The cross-document
 /// continuity headline is pure CSS in motion.css and needs none of this; this is optional polish.
 pub const MOTION_JS: &str = include_str!("../js/motion.js");
@@ -18,6 +23,7 @@ pub mod html;
 pub mod i18n;
 pub mod icons;
 pub mod identity;
+pub mod profile;
 pub mod shell;
 pub mod theme;
 
@@ -32,10 +38,11 @@ pub use html::{esc, raw, Html};
 pub use i18n::{fmt_date, fmt_int, month_abbr, resolve_locale, t, tf, tn, Locale};
 pub use icons::{holdfast_mark, HOLDFAST_MARK_SVG};
 pub use identity::{initial, letter_tile, tone};
+pub use profile::Profile;
 pub use shell::{
-    breadcrumb, console_head, lang_switcher, layout_split, page_shell, pagehead, tabs,
-    theme_switcher, wire_nav, wire_page_shell, Brand, NavItem, PageChrome, PageHead, ShellOpts,
-    Tab, TabsOpts, UserBox, WireShellOpts,
+    breadcrumb, console_head, lang_switcher, layout_split, page_shell, page_shell_with_profile,
+    pagehead, tabs, theme_switcher, wire_nav, wire_page_shell, wire_page_shell_with_profile, Brand,
+    NavItem, PageChrome, PageHead, ShellOpts, Tab, TabsOpts, UserBox, WireShellOpts,
 };
 pub use theme::{color_scheme_meta, html_theme_attr, resolve_theme};
 
@@ -119,7 +126,7 @@ mod tests {
             ["insert", "adjacent", "html"].concat(),
             ["{", "{"].concat(),
         ];
-        for js in [WIRE_JS, SPARK_JS, MOTION_JS] {
+        for js in [WIRE_JS, SPARK_JS, MOTION_JS, CANARY_JS] {
             let lower = js.to_ascii_lowercase();
             for needle in &banned {
                 assert!(
@@ -139,6 +146,12 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains(&["fetch", "("].concat()),
             "motion must stay network-free"
+        );
+        assert!(
+            !CANARY_JS
+                .to_ascii_lowercase()
+                .contains(&["fetch", "("].concat()),
+            "public canary must stay network-free"
         );
     }
 
@@ -276,5 +289,18 @@ mod tests {
         assert!(APP_CSS.contains("--surface-etched:"));
         assert!(APP_CSS.contains("background-size:48px 48px"));
         assert!(APP_CSS.contains("@media (forced-colors:active)"));
+    }
+
+    #[test]
+    fn canary_profile_layer_is_explicit_and_public_runtime_is_versioned() {
+        assert!(PROFILE_CSS.contains("[data-ody-profile]"));
+        assert!(PROFILE_CSS.contains("[data-ody-shell]"));
+        assert!(PROFILE_CSS.contains("background-size:48px 48px"));
+        assert!(PROFILE_CSS.contains("data-ody-status=\"operational\""));
+        assert!(!PROFILE_CSS.contains(":root:not([data-ody-profile])"));
+
+        assert!(CANARY_JS.contains("1.2.0-canary.1"));
+        assert!(CANARY_JS.contains("data-ody-shell-nav"));
+        assert!(CANARY_JS.contains("Odyssey.canary"));
     }
 }

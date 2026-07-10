@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="{{LANG}}"{{THEME}}>
+<html lang="{{LANG}}"{{THEME}} data-ody-profile="public">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,7 +11,7 @@
   <title>Status · HOLDFAST</title>
   <style>{{CSS}}</style>
 </head>
-<body class="page-console">
+<body class="page-console" data-ody-shell="1.2">
   <header class="topbar">
     <div class="topbar__inner">
       <a class="brand" href="/status" aria-label="HOLDFAST status home">
@@ -32,34 +32,21 @@
         <h1>{{STATUS_TITLE}}</h1>
         <p class="sub">{{STATUS_SUB}}</p>
       </div>
-      <details class="updates-pop">
-        <summary class="btn btn-secondary updates-pop__btn">{{GET_UPDATES}}</summary>
-        <nav class="updates-pop__menu">
-          <a class="updates-pop__item" href="#subscribe">{{WEBHOOK}}</a>
-          <a class="updates-pop__item" href="/feed.xml">{{RSS_FEED}}</a>
-          <a class="updates-pop__item" href="/api/status">{{JSON_API}}</a>
-        </nav>
-      </details>
+      <div class="statushead__actions">
+        {{PUBLIC_SIGNAL}}
+        {{REFRESH}}
+        <details class="updates-pop">
+          <summary class="btn btn-secondary updates-pop__btn">{{GET_UPDATES}}</summary>
+          <nav class="updates-pop__menu">
+            <a class="updates-pop__item" href="#subscribe">{{WEBHOOK}}</a>
+            <a class="updates-pop__item" href="/feed.xml">{{RSS_FEED}}</a>
+            <a class="updates-pop__item" href="/api/status">{{JSON_API}}</a>
+          </nav>
+        </details>
+      </div>
     </div>
 
-    {{BANNER}}
-
-    {{ACTIVE_INCIDENTS}}
-
-    {{MAINTENANCE}}
-
-    <section class="card">
-      <div class="card__head card__head--split"><h2>{{COMPONENTS_TITLE}}</h2>{{COMP_COUNT}}</div>
-      <div class="card__body">
-        {{COMPONENTS}}
-      </div>
-    </section>
-
-    {{INFRA}}
-
-    <h2 class="section-title">{{PAST_TITLE}}</h2>
-    <p class="sub">{{HISTORY_NOTE}} <a href="/feed.xml">{{RSS_FEED}}</a>.</p>
-    {{PAST_INCIDENTS}}
+    {{STATUS_LIVE}}
 
     {{SUBSCRIBE}}
   </main>
@@ -68,5 +55,6 @@
     <span>{{FOOTER}}</span>
     <span class="site-foot__links"><a href="/feed.xml">{{RSS}}</a> · <a href="/api/status">{{JSON_API}}</a> · {{UPDATED_LABEL}}</span>
   </footer>
+  {{SCRIPTS}}
 </body>
 </html>

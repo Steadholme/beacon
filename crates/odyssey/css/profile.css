@@ -1,0 +1,245 @@
+/* GENERATED FROM odyssey — DO NOT EDIT */
+/* ============================================================================
+   Odyssey 1.2 canary · HOLDFAST profile + shell language
+   ----------------------------------------------------------------------------
+   This layer is deliberately inert until a product opts in with the stable
+   root contract `data-ody-profile`. `data-ody-shell` adds the full mineral-grid
+   shell treatment. Unmarked 1.1 pages therefore keep their exact presentation.
+
+   The rules bridge the internal Rust class vocabulary and the public `.ody-*`
+   distribution without introducing per-product forks.
+   ============================================================================ */
+
+/* Profile is a semantic signal, not a complete theme. Products may still
+   override their ordinary accent tokens; this contract only coordinates shell,
+   navigation, status, and framing language across the estate. */
+[data-ody-profile]{
+  --ody-profile-signal:var(--accent,var(--ody-accent));
+  --ody-profile-soft:var(--accent-soft,var(--ody-accent-soft));
+  --ody-profile-ink:var(--accent-ink,var(--ody-accent-ink));
+  --ody-profile-rule:color-mix(in srgb,var(--ody-profile-signal) 58%,var(--border,var(--ody-border)));
+  --ody-profile-grid:var(--grid-line,var(--ody-grid-line));
+  --ody-profile-surface:var(--surface-etched,var(--ody-surface-etched));
+  --ody-profile-coordinate:var(--coordinate-ink,var(--ody-coordinate-ink));
+}
+
+[data-ody-profile="public"],
+[data-ody-profile="networking"],
+[data-ody-profile="communication"],
+[data-ody-profile="data"],
+[data-ody-profile="knowledge"],
+[data-ody-profile="ai"]{
+  --ody-profile-signal:var(--info,var(--ody-info));
+  --ody-profile-soft:var(--info-soft,var(--ody-info-soft));
+  --ody-profile-ink:var(--info-ink,var(--ody-info-ink));
+}
+
+[data-ody-profile="security"]{
+  --ody-profile-signal:var(--down,var(--ody-down));
+  --ody-profile-soft:var(--down-soft,var(--ody-down-soft));
+  --ody-profile-ink:var(--down-ink,var(--ody-down-ink));
+}
+
+[data-ody-profile="content"],
+[data-ody-profile="productivity"]{
+  --ody-profile-signal:var(--warn,var(--ody-warn));
+  --ody-profile-soft:var(--warn-soft,var(--ody-warn-soft));
+  --ody-profile-ink:var(--warn-ink,var(--ody-warn-ink));
+}
+
+[data-ody-profile="observability"]{
+  --ody-profile-signal:var(--ok,var(--ody-ok));
+  --ody-profile-soft:var(--ok-soft,var(--ody-ok-soft));
+  --ody-profile-ink:var(--ok-ink,var(--ody-ok-ink));
+}
+
+/* These orchestration surfaces intentionally use the HOLDFAST oxide accent
+   rather than borrowing a state colour. Keeping them explicit makes the root
+   contract mechanically discoverable and auditable. */
+[data-ody-profile="control"],
+[data-ody-profile="developer"],
+[data-ody-profile="identity"],
+[data-ody-profile="portal"]{
+  --ody-profile-signal:var(--accent,var(--ody-accent));
+  --ody-profile-soft:var(--accent-soft,var(--ody-accent-soft));
+  --ody-profile-ink:var(--accent-ink,var(--ody-accent-ink));
+}
+
+[data-ody-shell]{
+  min-height:100dvh;
+  background-color:var(--bg,var(--ody-bg));
+  background-image:
+    linear-gradient(to right,var(--ody-profile-grid) 1px,transparent 1px),
+    linear-gradient(to bottom,var(--ody-profile-grid) 1px,transparent 1px);
+  background-size:48px 48px;
+  background-position:-1px -1px;
+}
+
+/* Reusable product shell for bespoke templates. Existing page_shell markup also
+   receives the shared framing through the appbar/console aliases below. */
+.holdfast-shell,.ody-shell{
+  min-height:100dvh;
+  display:grid;
+  grid-template-columns:minmax(208px,256px) minmax(0,1fr);
+  grid-template-rows:auto minmax(0,1fr);
+  grid-template-areas:"bar bar" "rail stage";
+}
+
+.holdfast-shell__bar,.ody-shell__bar{grid-area:bar;min-width:0;}
+.holdfast-shell__rail,.ody-shell__rail{
+  grid-area:rail;
+  position:sticky;
+  top:var(--appbar-h,var(--ody-appbar-h,56px));
+  align-self:start;
+  min-height:calc(100dvh - var(--appbar-h,var(--ody-appbar-h,56px)));
+  padding:var(--sp-4,var(--ody-sp-4));
+  border-right:1px solid var(--ody-profile-rule);
+  background:color-mix(in srgb,var(--surface,var(--ody-surface)) 91%,transparent);
+}
+.holdfast-shell__stage,.ody-shell__stage{
+  grid-area:stage;
+  position:relative;
+  min-width:0;
+  padding:clamp(20px,3vw,48px);
+}
+.holdfast-shell__stage::before,.ody-shell__stage::before{
+  content:attr(data-ody-coordinate);
+  position:absolute;
+  top:10px;
+  right:clamp(16px,2vw,32px);
+  color:var(--ody-profile-coordinate);
+  font:600 var(--fs-micro,var(--ody-fs-micro))/1 var(--mono,var(--ody-mono));
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  pointer-events:none;
+}
+
+[data-ody-profile] :is(.appbar,.topbar,.ody-appbar){
+  border-bottom-color:var(--ody-profile-rule);
+  box-shadow:inset 0 -2px 0 color-mix(in srgb,var(--ody-profile-signal) 22%,transparent);
+}
+[data-ody-profile] :is(.app-tile,.ody-appbar__tile,.holdfast-shell__mark,.ody-shell__mark){
+  border-radius:2px;
+  background:var(--ody-profile-signal);
+  color:var(--surface,var(--ody-surface));
+  clip-path:polygon(0 0,calc(100% - 7px) 0,100% 7px,100% 100%,7px 100%,0 calc(100% - 7px));
+}
+
+.holdfast-shell__product,.ody-shell__product{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  gap:var(--sp-3,var(--ody-sp-3));
+  align-items:center;
+  padding:0 0 var(--sp-4,var(--ody-sp-4));
+  margin-bottom:var(--sp-3,var(--ody-sp-3));
+  border-bottom:1px solid var(--ody-profile-rule);
+}
+.holdfast-shell__product-name,.ody-shell__product-name{
+  color:var(--ink,var(--ody-ink));
+  font-weight:650;
+  letter-spacing:-.02em;
+}
+.holdfast-shell__product-meta,.ody-shell__product-meta{
+  margin-top:2px;
+  color:var(--ody-profile-coordinate);
+  font:600 var(--fs-micro,var(--ody-fs-micro))/1.2 var(--mono,var(--ody-mono));
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+
+.holdfast-profile,.ody-profile{
+  display:inline-flex;
+  align-items:center;
+  min-height:22px;
+  padding:0 var(--sp-2,var(--ody-sp-2));
+  border:1px solid var(--ody-profile-rule);
+  background:var(--ody-profile-soft);
+  color:var(--ody-profile-ink);
+  font:650 var(--fs-micro,var(--ody-fs-micro))/1 var(--mono,var(--ody-mono));
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+
+/* Navigation reads like a plotted route: a hard signal rail, coordinate tick,
+   and monospaced active marker instead of a generic rounded tab. */
+[data-ody-profile] :is(.appnav,.nav__item,.ody-appbar__nav a,.ody-nav__item){position:relative;}
+[data-ody-profile] :is(.appnav,.nav__item,.ody-appbar__nav a,.ody-nav__item).is-active,
+[data-ody-profile] :is(.appnav,.nav__item,.ody-appbar__nav a,.ody-nav__item)[aria-current="page"]{
+  border-radius:2px;
+  background:var(--ody-profile-soft);
+  color:var(--ody-profile-ink);
+  box-shadow:inset 3px 0 0 var(--ody-profile-signal),inset 0 0 0 1px var(--ody-profile-rule);
+}
+[data-ody-profile] :is(.appnav,.nav__item,.ody-appbar__nav a,.ody-nav__item).is-active::after,
+[data-ody-profile] :is(.appnav,.nav__item,.ody-appbar__nav a,.ody-nav__item)[aria-current="page"]::after{
+  content:"·";
+  margin-left:auto;
+  color:var(--ody-profile-signal);
+  font:800 16px/1 var(--mono,var(--ody-mono));
+}
+
+/* Shared status language. Visible text remains host-owned and localisable; the
+   data value controls only tone and is normalised by the 1.2 JS enhancer. */
+.holdfast-signal,.ody-signal{
+  --ody-signal:var(--unknown,var(--ody-unknown));
+  --ody-signal-soft:var(--surface-3,var(--ody-surface-3));
+  display:inline-flex;
+  align-items:center;
+  gap:var(--sp-2,var(--ody-sp-2));
+  min-height:24px;
+  padding:0 var(--sp-2,var(--ody-sp-2));
+  border:1px solid color-mix(in srgb,var(--ody-signal) 42%,var(--border,var(--ody-border)));
+  background:var(--ody-signal-soft);
+  color:var(--ink-2,var(--ody-ink-2));
+  font:650 var(--fs-micro,var(--ody-fs-micro))/1 var(--mono,var(--ody-mono));
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
+.holdfast-signal::before,.ody-signal::before{
+  content:"";
+  width:7px;
+  height:7px;
+  flex:0 0 auto;
+  background:var(--ody-signal);
+  box-shadow:0 0 0 2px color-mix(in srgb,var(--ody-signal) 18%,transparent);
+}
+:is(.holdfast-signal,.ody-signal)[data-ody-status="operational"],
+:is(.holdfast-signal,.ody-signal)[data-ody-status="healthy"]{
+  --ody-signal:var(--ok,var(--ody-ok));
+  --ody-signal-soft:var(--ok-soft,var(--ody-ok-soft));
+}
+:is(.holdfast-signal,.ody-signal)[data-ody-status="degraded"]{
+  --ody-signal:var(--warn,var(--ody-warn));
+  --ody-signal-soft:var(--warn-soft,var(--ody-warn-soft));
+}
+:is(.holdfast-signal,.ody-signal)[data-ody-status="outage"],
+:is(.holdfast-signal,.ody-signal)[data-ody-status="down"]{
+  --ody-signal:var(--down,var(--ody-down));
+  --ody-signal-soft:var(--down-soft,var(--ody-down-soft));
+}
+:is(.holdfast-signal,.ody-signal)[data-ody-status="maintenance"]{
+  --ody-signal:var(--info,var(--ody-info));
+  --ody-signal-soft:var(--info-soft,var(--ody-info-soft));
+}
+
+@media (max-width:780px){
+  .holdfast-shell,.ody-shell{
+    grid-template-columns:1fr;
+    grid-template-rows:auto auto minmax(0,1fr);
+    grid-template-areas:"bar" "rail" "stage";
+  }
+  .holdfast-shell__rail,.ody-shell__rail{
+    position:static;
+    min-height:0;
+    overflow-x:auto;
+    border-right:0;
+    border-bottom:1px solid var(--ody-profile-rule);
+  }
+}
+
+@media (forced-colors:active){
+  [data-ody-profile] :is(.appbar,.topbar,.ody-appbar),
+  .holdfast-shell__rail,.ody-shell__rail,
+  .holdfast-profile,.ody-profile,.holdfast-signal,.ody-signal{border-color:CanvasText;box-shadow:none;}
+  [data-ody-profile] :is(.appnav,.nav__item,.ody-appbar__nav a,.ody-nav__item)[aria-current="page"]{outline:2px solid Highlight;box-shadow:none;}
+}

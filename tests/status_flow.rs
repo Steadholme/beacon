@@ -29,6 +29,15 @@ fn get(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).unwrap()
 }
 
+fn wire_get(uri: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(header::ACCEPT, "text/html")
+        .header("x-wire", "1")
+        .body(Body::empty())
+        .unwrap()
+}
+
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).to_string()
 }
@@ -63,6 +72,13 @@ async fn healthz_ok() {
 #[tokio::test]
 async fn public_status_renders_without_auth() {
     let state = build_dev_state().await;
+    let (root_status, root_body) = call(&state, get("/")).await;
+    assert_eq!(root_status, StatusCode::OK, "public host root is open");
+    assert!(
+        text(&root_body).starts_with("<!DOCTYPE html>"),
+        "public host root keeps the complete SSR document"
+    );
+
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK, "public status page is open");
     let html = text(&body);
@@ -102,6 +118,142 @@ async fn public_status_renders_without_auth() {
     assert!(
         html.contains(r#"data-date=""#),
         "bar dates render as data attributes"
+    );
+}
+
+#[tokio::test]
+async fn public_wire_fragment_matches_the_full_ssr_live_region() {
+    let state = build_dev_state().await;
+
+    let full_response = app(state.clone()).oneshot(get("/status")).await.unwrap();
+    assert_eq!(full_response.status(), StatusCode::OK);
+    assert_eq!(
+        full_response.headers().get(header::VARY).unwrap(),
+        "X-Wire",
+        "representation caches must vary on the Wire handshake"
+    );
+    assert_eq!(
+        full_response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store",
+        "the public live snapshot must not enter a shared cache"
+    );
+    let full = text(
+        &axum::body::to_bytes(full_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    );
+
+    let fragment_response = app(state.clone())
+        .oneshot(wire_get("/status"))
+        .await
+        .unwrap();
+    assert_eq!(
+        fragment_response.status(),
+        StatusCode::OK,
+        "Wire refresh remains anonymous"
+    );
+    assert_eq!(
+        fragment_response.headers().get(header::VARY).unwrap(),
+        "X-Wire"
+    );
+    assert_eq!(
+        fragment_response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .unwrap(),
+        "no-store"
+    );
+    assert!(fragment_response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
+    let fragment = text(
+        &axum::body::to_bytes(fragment_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    );
+
+    let live_start = full.find(r#"<div id="status-live""#).unwrap();
+    let subscribe_start = full[live_start..]
+        .find("\n\n    <section class=\"card\" id=\"subscribe\">")
+        .map(|offset| live_start + offset)
+        .unwrap();
+    assert_eq!(
+        fragment,
+        full[live_start..subscribe_start],
+        "full and fragment responses must share one renderer"
+    );
+    assert!(fragment.starts_with(r#"<div id="status-live""#));
+    assert!(!fragment.contains("<!DOCTYPE html>"));
+    assert!(!fragment.contains("<script"));
+    assert!(!fragment.contains(r#"action="/subscriptions""#));
+}
+
+#[tokio::test]
+async fn public_refresh_keeps_a_complete_no_js_floor_and_declares_error_recovery() {
+    let state = build_dev_state().await;
+    let (status, body) = call(&state, get("/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = text(&body);
+
+    assert!(html.starts_with("<!DOCTYPE html>"));
+    assert!(html.contains(r#"data-ody-profile="public""#));
+    assert!(html.contains(r#"data-ody-shell="1.2""#));
+    assert!(html.contains(r#"<meta http-equiv="refresh" content="300">"#));
+    assert!(html.contains("Public · read only"));
+    assert!(html.contains(r#"role="region" aria-label="Live system status""#));
+    assert!(
+        !html.contains(r#"aria-label="Live system status" aria-live="#),
+        "the large live region must not be announced wholesale"
+    );
+
+    let refresh_start = html
+        .find(r#"<a class="btn btn-secondary btn-sm" href="/status" role="button""#)
+        .expect("typed Odyssey refresh link");
+    let refresh_end = html[refresh_start..]
+        .find("</a>")
+        .map(|offset| refresh_start + offset + 4)
+        .unwrap();
+    let refresh = &html[refresh_start..refresh_end];
+    for contract in [
+        r#"href="/status""#,
+        r#"data-wire="get""#,
+        r##"data-wire-target="#status-live""##,
+        r##"data-wire-select="#status-live""##,
+        r#"data-wire-swap="outer""#,
+        r#"data-wire-busy="Refreshing…""#,
+        r#"data-wire-ok="Live status refreshed.""#,
+        r#"data-wire-err="Live refresh failed — use the link to reload.""#,
+    ] {
+        assert!(
+            refresh.contains(contract),
+            "missing refresh contract: {contract}"
+        );
+    }
+    assert!(!refresh.contains("data-wire-push"));
+    assert!(!refresh.contains("data-wire-optimistic"));
+    assert!(
+        html.contains("window.OdysseyWire"),
+        "audited runtime embedded"
+    );
+    assert!(
+        html.contains(r#"action="/subscriptions""#),
+        "ordinary href navigation returns the complete SSR page"
+    );
+
+    let invalid_wire = Request::builder()
+        .uri("/status")
+        .header("x-wire", "unexpected")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = call(&state, invalid_wire).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        text(&body).starts_with("<!DOCTYPE html>"),
+        "an invalid handshake safely falls back to full SSR"
     );
 }
 
@@ -531,11 +683,12 @@ async fn admin_page_renders_with_email() {
 #[tokio::test]
 async fn admin_page_rejects_anonymous_reads() {
     let state = build_dev_state().await;
-    let (status, body) = call(&state, get("/admin")).await;
-
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert!(!text(&body).contains("Post an incident"));
-    assert!(!text(&body).contains("Status subscribers"));
+    for request in [get("/admin"), wire_get("/admin")] {
+        let (status, body) = call(&state, request).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(!text(&body).contains("Post an incident"));
+        assert!(!text(&body).contains("Status subscribers"));
+    }
 }
 
 #[tokio::test]

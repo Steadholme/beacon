@@ -7,13 +7,13 @@
 //! and a "Past incidents" section (last 14 days, grouped by day).
 
 use axum::extract::State;
-use axum::http::HeaderMap;
-use axum::response::Html;
+use axum::http::{header, HeaderMap, HeaderValue};
+use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
 use crate::handlers::{
-    app_css, esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, hv, incident_status_pill,
-    rel_time, render_theme_switch, severity_pill, userbox, SHIELD_SVG,
+    app_css, dynamic_js, esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, hv,
+    incident_status_pill, rel_time, render_theme_switch, severity_pill, userbox, SHIELD_SVG,
 };
 use crate::i18n;
 use crate::model::{
@@ -24,15 +24,35 @@ use crate::store::{Incident, IncidentUpdate};
 use crate::{now_secs, vitals, AppState};
 
 const STATUS_HTML: &str = include_str!("../../templates/status.html");
+const STATUS_LIVE_ID: &str = "status-live";
+const STATUS_LIVE_SELECTOR: &str = "#status-live";
 
 /// `GET /status` — the public status page (no auth).
-pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
+///
+/// An Odyssey Wire request (`X-Wire: 1`) receives only the shared live region. A normal request,
+/// including a no-JavaScript activation of the refresh link, always receives the complete SSR
+/// document. The snapshot is explicitly non-cacheable: it varies by representation, locale, and
+/// theme while also carrying live operational data.
+pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let now = now_secs();
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
     let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
     let mut view = build_status(state.store.as_ref(), now).await;
     attach_infra(&mut view, &state, now);
-    Html(render_status(&view, now, loc, theme))
+
+    let body = if is_wire_request(&headers) {
+        render_status_live(&view, now, loc)
+    } else {
+        render_status(&view, now, loc, theme)
+    };
+    let mut response = Html(body).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::VARY, HeaderValue::from_static("X-Wire"));
+    response
 }
 
 /// `GET /api/status` — the public machine-readable status snapshot (no auth).
@@ -50,6 +70,10 @@ fn attach_infra(view: &mut StatusView, state: &AppState, now: i64) {
         .as_ref()
         .and_then(|v| v.snapshot())
         .and_then(|snap| vitals::public_infra(&snap, now));
+}
+
+fn is_wire_request(headers: &HeaderMap) -> bool {
+    hv(headers, "x-wire").is_some_and(|value| value.trim() == "1")
 }
 
 fn render_lang_switch(loc: odyssey::Locale) -> String {
@@ -189,6 +213,25 @@ fn severity_pill_l(loc: odyssey::Locale, severity: &str) -> String {
     )
 }
 
+fn render_refresh(loc: odyssey::Locale) -> String {
+    odyssey::link_button_with_wire(
+        "/status",
+        i18n::t(loc, "status.refresh"),
+        odyssey::Variant::Secondary,
+        odyssey::BtnOpts {
+            small: true,
+            ..Default::default()
+        },
+        odyssey::WireOpts::new(STATUS_LIVE_SELECTOR)
+            .select(STATUS_LIVE_SELECTOR)
+            .swap(odyssey::WireSwap::Outer)
+            .busy_label(i18n::t(loc, "status.refresh_busy"))
+            .success_message(i18n::t(loc, "status.refresh_success"))
+            .error_message(i18n::t(loc, "status.refresh_error")),
+    )
+    .0
+}
+
 fn render_status(view: &StatusView, now: i64, loc: odyssey::Locale, theme: &str) -> String {
     let updated = rel_time_l(loc, view.updated_at, now);
     STATUS_HTML
@@ -202,23 +245,19 @@ fn render_status(view: &StatusView, now: i64, loc: odyssey::Locale, theme: &str)
         .replace("{{LANGSWITCH}}", &render_lang_switch(loc))
         .replace("{{STATUS_TITLE}}", i18n::t(loc, "status.title"))
         .replace("{{STATUS_SUB}}", i18n::t(loc, "status.sub"))
+        .replace(
+            "{{PUBLIC_SIGNAL}}",
+            &format!(
+                r#"<span class="statushead__signal"><span aria-hidden="true"></span>{}</span>"#,
+                esc(i18n::t(loc, "status.public_read_only"))
+            ),
+        )
+        .replace("{{REFRESH}}", &render_refresh(loc))
         .replace("{{GET_UPDATES}}", i18n::t(loc, "status.get_updates"))
         .replace("{{WEBHOOK}}", i18n::t(loc, "status.webhook"))
         .replace("{{RSS_FEED}}", i18n::t(loc, "status.rss_feed"))
         .replace("{{JSON_API}}", i18n::t(loc, "status.json_api"))
-        .replace("{{BANNER}}", &render_hero(view, now, loc))
-        .replace(
-            "{{ACTIVE_INCIDENTS}}",
-            &render_active_incidents(view, now, loc),
-        )
-        .replace("{{MAINTENANCE}}", &render_maintenances(view, now, loc))
-        .replace("{{COMP_COUNT}}", &render_component_count(view))
-        .replace("{{COMPONENTS_TITLE}}", i18n::t(loc, "status.components"))
-        .replace("{{COMPONENTS}}", &render_components(view, now, loc))
-        .replace("{{INFRA}}", &render_infra(loc, view.infra.as_ref(), now))
-        .replace("{{PAST_TITLE}}", i18n::t(loc, "status.past"))
-        .replace("{{HISTORY_NOTE}}", i18n::t(loc, "status.history_note"))
-        .replace("{{PAST_INCIDENTS}}", &render_past_incidents(view, now, loc))
+        .replace("{{STATUS_LIVE}}", &render_status_live(view, now, loc))
         .replace("{{SUBSCRIBE}}", &render_subscribe(loc))
         .replace("{{FOOTER}}", i18n::t(loc, "status.footer"))
         .replace("{{RSS}}", i18n::t(loc, "status.rss"))
@@ -226,6 +265,40 @@ fn render_status(view: &StatusView, now: i64, loc: odyssey::Locale, theme: &str)
             "{{UPDATED_LABEL}}",
             &i18n::tf(loc, "status.updated", &[("time", &updated)]),
         )
+        .replace("{{SCRIPTS}}", dynamic_js())
+}
+
+/// Render the one replaceable public status region. Full-page SSR and Wire fragments call this
+/// exact function, so a dynamic refresh cannot drift from the no-JavaScript representation.
+fn render_status_live(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
+    format!(
+        r#"<div id="{id}" class="status-live" role="region" aria-label="{label}">
+{banner}
+{active}
+{maintenance}
+<section class="card">
+  <div class="card__head card__head--split"><h2>{components_title}</h2>{component_count}</div>
+  <div class="card__body">{components}</div>
+</section>
+{infra}
+<h2 class="section-title">{past_title}</h2>
+<p class="sub">{history_note} <a href="/feed.xml">{rss_feed}</a>.</p>
+{past_incidents}
+</div>"#,
+        id = STATUS_LIVE_ID,
+        label = esc(i18n::t(loc, "status.live_region")),
+        banner = render_hero(view, now, loc),
+        active = render_active_incidents(view, now, loc),
+        maintenance = render_maintenances(view, now, loc),
+        components_title = esc(i18n::t(loc, "status.components")),
+        component_count = render_component_count(view),
+        components = render_components(view, now, loc),
+        infra = render_infra(loc, view.infra.as_ref(), now),
+        past_title = esc(i18n::t(loc, "status.past")),
+        history_note = esc(i18n::t(loc, "status.history_note")),
+        rss_feed = esc(i18n::t(loc, "status.rss_feed")),
+        past_incidents = render_past_incidents(view, now, loc),
+    )
 }
 
 fn checked_uptime_avg<'a, I>(components: I) -> Option<f64>
@@ -279,7 +352,7 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
   </div>
   <div class="status-hero__meta">
     {uptime}
-    <span class="status-hero__updated">Updated {updated}</span>
+    <span class="status-hero__updated">{updated}</span>
   </div>
 </section>"#,
         headline = esc(i18n::t(loc, headline_key)),

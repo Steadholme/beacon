@@ -2,6 +2,7 @@
 use crate::html::{esc, raw, Html};
 use crate::i18n::{t, Locale};
 use crate::icons;
+use crate::profile::Profile;
 use crate::{dynamic_scripts_with, RuntimeOpts, APP_CSS};
 
 pub struct Brand {
@@ -121,7 +122,22 @@ pub struct PageChrome<'a> {
 }
 
 pub fn page_shell(chrome: PageChrome<'_>, body: Html, opts: ShellOpts) -> String {
-    page_shell_impl(chrome, body, opts, None)
+    page_shell_impl(chrome, body, opts, None, None)
+}
+
+/// Render the standard shell with the Odyssey 1.2 profile root contract.
+///
+/// This is a separate additive entry point so existing [`page_shell`] markup and default
+/// presentation remain compatible. Profiled pages stamp `data-ody-profile` on `<html>` and
+/// `data-ody-shell` on `<body>`, activating the shared HOLDFAST shell, mineral grid, navigation,
+/// and status language.
+pub fn page_shell_with_profile(
+    chrome: PageChrome<'_>,
+    body: Html,
+    opts: ShellOpts,
+    profile: Profile,
+) -> String {
+    page_shell_impl(chrome, body, opts, None, Some(profile))
 }
 
 /// Render the standard shell with Wire-boosted app navigation and the internal runtime bundle.
@@ -135,7 +151,21 @@ pub fn wire_page_shell(
     opts: ShellOpts,
     wire: WireShellOpts<'_>,
 ) -> String {
-    page_shell_impl(chrome, body, opts, Some(wire))
+    page_shell_impl(chrome, body, opts, Some(wire), None)
+}
+
+/// Combine Wire navigation with the Odyssey 1.2 profile root contract.
+///
+/// It preserves the runtime and security boundaries of [`wire_page_shell`]; the profile only
+/// opts the rendered document into presentation semantics.
+pub fn wire_page_shell_with_profile(
+    chrome: PageChrome<'_>,
+    body: Html,
+    opts: ShellOpts,
+    wire: WireShellOpts<'_>,
+    profile: Profile,
+) -> String {
+    page_shell_impl(chrome, body, opts, Some(wire), Some(profile))
 }
 
 fn page_shell_impl(
@@ -143,6 +173,7 @@ fn page_shell_impl(
     body: Html,
     opts: ShellOpts,
     wire: Option<WireShellOpts<'_>>,
+    profile: Option<Profile>,
 ) -> String {
     let mut body_attr = String::new();
     if !opts.body_class.is_empty() {
@@ -150,6 +181,9 @@ fn page_shell_impl(
     }
     if opts.compact {
         body_attr.push_str(" data-density=\"compact\"");
+    }
+    if profile.is_some() {
+        body_attr.push_str(" data-ody-shell=\"1.2\"");
     }
     let wire_target = wire.map(|opts| format!("#{}", opts.region_id));
     let nav = render_nav(chrome.nav, wire_target.as_deref());
@@ -172,6 +206,9 @@ fn page_shell_impl(
     // Theme stamping is LIGHT-first: light emits neither the `data-theme` attr nor the
     // `color-scheme` meta, keeping the output byte-identical to the pre-theme era.
     let theme_attr = crate::theme::html_theme_attr(opts.theme);
+    let profile_attr = profile
+        .map(|profile| format!(" data-ody-profile=\"{}\"", profile.as_str()))
+        .unwrap_or_default();
     let color_scheme_meta = if theme_attr.is_empty() {
         String::new()
     } else {
@@ -184,7 +221,7 @@ fn page_shell_impl(
     format!(
         concat!(
             "<!doctype html>\n",
-            "<html lang=\"{lang}\"{theme_attr}>\n",
+            "<html lang=\"{lang}\"{theme_attr}{profile_attr}>\n",
             "<head>\n",
             "<meta charset=\"utf-8\">\n",
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n",
@@ -211,6 +248,7 @@ fn page_shell_impl(
         ),
         lang = opts.locale.bcp47(),
         theme_attr = theme_attr,
+        profile_attr = profile_attr,
         color_scheme_meta = color_scheme_meta,
         title = esc(chrome.title),
         css = APP_CSS,
@@ -871,10 +909,38 @@ mod tests {
     fn static_page_shell_keeps_legacy_markup_and_scripts_opt_in() {
         let out = page_shell(chrome_with_nav(), Html::default(), ShellOpts::default());
 
+        assert!(out.contains("<html lang=\"en\">"));
+        assert!(!out.contains("<html lang=\"en\" data-ody-profile"));
+        assert!(!out.contains("<body data-ody-shell"));
         assert!(out.contains("<nav class=\"appbar__nav\">"));
         assert!(!out.contains("<nav class=\"appbar__nav\" data-wire-nav"));
         assert!(out.contains("<main class=\"console\"></main>"));
         assert!(!out.contains("<main id="));
         assert!(!out.contains("<script"));
+    }
+
+    #[test]
+    fn profiled_shell_is_an_explicit_additive_root_contract() {
+        let public = page_shell_with_profile(
+            chrome_with_nav(),
+            Html::default(),
+            ShellOpts::default(),
+            Profile::Public,
+        );
+        assert!(public.contains("<html lang=\"en\" data-ody-profile=\"public\">"));
+        assert!(public.contains("<body data-ody-shell=\"1.2\">"));
+        assert!(public.contains("[data-ody-profile=\"public\"]"));
+
+        let portal = wire_page_shell_with_profile(
+            chrome_with_nav(),
+            Html::default(),
+            ShellOpts::default(),
+            WireShellOpts::default(),
+            Profile::Portal,
+        );
+        assert!(portal.contains("data-ody-profile=\"portal\""));
+        assert!(portal.contains("data-ody-shell=\"1.2\""));
+        assert!(portal.contains("data-wire-nav=\"#odyssey-main\""));
+        assert!(portal.contains("odyssey-wire v1"));
     }
 }
