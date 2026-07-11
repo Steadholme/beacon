@@ -56,12 +56,16 @@ pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> R
 }
 
 /// `GET /api/status` — the public machine-readable status snapshot (no auth).
-pub async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> Json<StatusView> {
+pub async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let now = now_secs();
     let _loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
     let mut view = build_status(state.store.as_ref(), now).await;
     attach_infra(&mut view, &state, now);
-    Json(view)
+    let mut response = Json(view).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn attach_infra(view: &mut StatusView, state: &AppState, now: i64) {

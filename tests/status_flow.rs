@@ -260,8 +260,15 @@ async fn public_refresh_keeps_a_complete_no_js_floor_and_declares_error_recovery
 #[tokio::test]
 async fn api_status_json_shape() {
     let state = build_dev_state().await;
-    let (status, body) = call(&state, get("/api/status")).await;
-    assert_eq!(status, StatusCode::OK);
+    let response = app(state).oneshot(get("/api/status")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["overall"], "operational");
     assert!(v["components"].as_array().unwrap().len() >= 3);
