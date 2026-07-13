@@ -142,6 +142,9 @@ fn spawn_fan_out(
     update: Option<&IncidentUpdate>,
     now: i64,
 ) {
+    if !state.config.public_webhooks_enabled {
+        return;
+    }
     let body = notify::incident_body(event, incident, update, now);
     let store = state.store.clone();
     let timeout = state.config.probe_timeout;
@@ -468,13 +471,7 @@ fn render_template_buttons() -> String {
 // Rendering
 // ---------------------------------------------------------------------------
 
-async fn render_admin(
-    state: &AppState,
-    email: &str,
-    csrf: &str,
-    now: i64,
-    theme: &str,
-) -> String {
+async fn render_admin(state: &AppState, email: &str, csrf: &str, now: i64, theme: &str) -> String {
     let vitals = state.vitals.as_ref().and_then(|v| v.snapshot());
     ADMIN_HTML
         .replace("{{CSS}}", app_css())

@@ -4,11 +4,12 @@
 //! renders without auth (status page, JSON API, RSS feed), the incident/maintenance
 //! lifecycle through the CSRF-protected admin POSTs, the banner precedence
 //! (critical incident > maintenance > all-ok), the maintenance pill masking, and the
-//! 90-day uptime bars.
+//! compact 30-day public history.
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
-use beacon::{app, build_dev_state, now_secs, AppState};
+use beacon::config::{Config, PublicComponent};
+use beacon::{app, build_dev_state, internal_app, now_secs, state_with, AppState};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -84,10 +85,11 @@ async fn public_status_renders_without_auth() {
     let html = text(&body);
     assert!(html.contains("HOLDFAST"), "brand present");
     assert!(html.contains("System status"), "page heading present");
-    // The default seed components show up.
+    // The fail-safe public catalog shows only explicitly listed components. CA remains an
+    // internal raw probe even though it is present in the default seed.
     assert!(html.contains("Gateway"));
     assert!(html.contains("Identity"));
-    assert!(html.contains("CA"));
+    assert!(!html.contains(r#"title="CA""#));
     // No data yet -> nominal banner, no active-incident section, no maintenance section.
     assert!(html.contains("All systems operational"));
     assert!(
@@ -96,11 +98,12 @@ async fn public_status_renders_without_auth() {
     );
     assert!(!html.contains("Active incidents"));
     assert!(html.contains("Past incidents"));
-    assert!(html.contains("No incidents reported."));
-    assert_eq!(html.matches(r#"class="day-group""#).count(), 14);
-    assert!(html.contains(r#"<span class="card__head-meta">3 monitored</span>"#));
-    assert!(html
-        .contains(r##"<a class="updates-pop__item" href="#subscribe">Webhook notifications</a>"##));
+    assert!(html.contains("No incidents reported in the last 14 days."));
+    assert_eq!(html.matches(r#"class="day-group""#).count(), 0);
+    assert!(html.contains(r#"class="bc-snapshot""#));
+    assert!(html.contains(r#"<span class="card__head-meta">2 monitored</span>"#));
+    assert!(!html.contains(r#"action="/subscriptions""#));
+    assert!(html.contains("Webhook registration is currently unavailable"));
     // Inlined CSS (embedded design system).
     assert!(
         html.contains("--accent:var(--c-oxide-600)")
@@ -108,9 +111,8 @@ async fn public_status_renders_without_auth() {
             && html.contains("background-size:48px 48px"),
         "current Odyssey Sovereign Atlas tokens and material are inlined"
     );
-    // 90-day bars render one span per day per component: 3 components x 90 days, all
-    // unknown (no probe data yet).
-    assert_eq!(html.matches(r#"class="bar bar-unknown""#).count(), 270);
+    // Public payload carries 30 days for two explicitly projected components.
+    assert_eq!(html.matches(r#"class="bar bar-unknown""#).count(), 60);
     assert!(
         html.contains(r#"data-uptime="no data""#),
         "unknown days carry no-data metadata"
@@ -178,7 +180,7 @@ async fn public_wire_fragment_matches_the_full_ssr_live_region() {
 
     let live_start = full.find(r#"<div id="status-live""#).unwrap();
     let subscribe_start = full[live_start..]
-        .find("\n\n    <section class=\"card\" id=\"subscribe\">")
+        .find("\n\n    <section class=\"card bc-channels\" id=\"subscribe\">")
         .map(|offset| live_start + offset)
         .unwrap();
     assert_eq!(
@@ -239,10 +241,7 @@ async fn public_refresh_keeps_a_complete_no_js_floor_and_declares_error_recovery
         html.contains("window.OdysseyWire"),
         "audited runtime embedded"
     );
-    assert!(
-        html.contains(r#"action="/subscriptions""#),
-        "ordinary href navigation returns the complete SSR page"
-    );
+    assert!(html.contains(r#"href="/feed.xml""#));
 
     let invalid_wire = Request::builder()
         .uri("/status")
@@ -271,7 +270,13 @@ async fn api_status_json_shape() {
         .unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["overall"], "operational");
-    assert!(v["components"].as_array().unwrap().len() >= 3);
+    assert_eq!(v["history_days"], 30);
+    assert_eq!(v["components"].as_array().unwrap().len(), 2);
+    assert!(v["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|component| component["name"] != "CA"));
     let gw = v["components"]
         .as_array()
         .unwrap()
@@ -280,10 +285,73 @@ async fn api_status_json_shape() {
         .unwrap();
     assert_eq!(gw["status"], "operational");
     assert_eq!(gw["uptime_24h"], 100.0);
-    assert_eq!(gw["days"].as_array().unwrap().len(), 90, "90 daily bars");
+    assert_eq!(gw["days"].as_array().unwrap().len(), 30, "30 daily bars");
     assert_eq!(gw["days"][0]["status"], "unknown", "no data yet -> unknown");
     assert!(v["incidents"].as_array().unwrap().is_empty());
     assert!(v["maintenances"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn raw_status_exists_only_on_the_dedicated_internal_router() {
+    let state = build_dev_state().await;
+
+    let public = app(state.clone())
+        .oneshot(get("/api/internal/status"))
+        .await
+        .unwrap();
+    assert_eq!(
+        public.status(),
+        StatusCode::UNAUTHORIZED,
+        "public router has no raw status route; fallback remains admin-authenticated"
+    );
+
+    let response = internal_app(state)
+        .oneshot(get("/api/status"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let view: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(view["history_days"], 90);
+    assert_eq!(view["components"].as_array().unwrap().len(), 3);
+    assert!(view["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|component| component["name"] == "CA"));
+}
+
+#[tokio::test]
+async fn public_catalog_aggregates_raw_checks_without_leaking_member_names() {
+    let mut config = Config::dev();
+    config.public_catalog = vec![PublicComponent {
+        name: "Public edge".to_string(),
+        group: "Delivery".to_string(),
+        checks: vec!["Gateway".to_string(), "CA".to_string()],
+    }];
+    let state = state_with(config).await;
+    let now = now_secs();
+    state.store.insert_result("Gateway", true, 12, now).await;
+    state.store.insert_result("CA", false, 44, now).await;
+
+    let (_, body) = call(&state, get("/api/status")).await;
+    let view: Value = serde_json::from_slice(&body).unwrap();
+    let components = view["components"].as_array().unwrap();
+    assert_eq!(components.len(), 1);
+    assert_eq!(components[0]["name"], "Public edge");
+    assert_eq!(components[0]["kind"], "service");
+    assert_eq!(components[0]["status"], "down", "worst raw member wins");
+    assert_eq!(components[0]["latency_ms"], 44);
+    assert_eq!(view["groups"][0]["name"], "Delivery");
+    let json = text(&body);
+    assert!(!json.contains(r#"\"name\":\"Gateway\""#));
+    assert!(!json.contains(r#"\"name\":\"CA\""#));
 }
 
 #[tokio::test]
@@ -323,10 +391,10 @@ async fn daily_bars_reflect_probe_results() {
         .find(|c| c["name"] == "Gateway")
         .unwrap();
     let days = gw["days"].as_array().unwrap();
-    assert_eq!(days.len(), 90);
-    assert_eq!(days[89]["status"], "down", "75% today -> down tint");
-    assert_eq!(days[89]["uptime"], 75.0);
-    assert_eq!(days[0]["status"], "unknown", "90 days ago -> no data");
+    assert_eq!(days.len(), 30);
+    assert_eq!(days[29]["status"], "down", "75% today -> down tint");
+    assert_eq!(days[29]["uptime"], 75.0);
+    assert_eq!(days[0]["status"], "unknown", "30 days ago -> no data");
     assert_eq!(days[0]["uptime"], Value::Null);
 
     // The HTML page renders the same bars with date + percent metadata.
@@ -491,6 +559,53 @@ async fn incident_lifecycle_shows_on_public_status() {
 }
 
 #[tokio::test]
+async fn public_incidents_and_feed_fail_closed_on_internal_affected_names() {
+    let state = build_dev_state().await;
+
+    for form in [
+        format!(
+            "title=Internal+CA+rotation&severity=critical&affected=CA&body=keyward%3A8200&csrf_token={CSRF}"
+        ),
+        format!(
+            "title=Gateway+and+internal+dependency&severity=minor&affected=CA%2CGateway&body=public+impact&csrf_token={CSRF}"
+        ),
+    ] {
+        let (status, _) = call(
+            &state,
+            post_admin("/admin/incidents", OPERATOR, &form),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+    }
+
+    let (_, body) = call(&state, get("/api/status")).await;
+    let view: Value = serde_json::from_slice(&body).unwrap();
+    let incidents = view["incidents"].as_array().unwrap();
+    assert_eq!(incidents.len(), 1, "internal-only incident is not public");
+    assert_eq!(incidents[0]["title"], "Gateway and internal dependency");
+    assert_eq!(incidents[0]["affected"], "Gateway");
+    let public_json = text(&body);
+    assert!(!public_json.contains("Internal CA rotation"));
+    assert!(!public_json.contains("keyward:8200"));
+
+    let (_, feed) = call(&state, get("/feed.xml")).await;
+    let feed = text(&feed);
+    assert!(feed.contains("Gateway and internal dependency"));
+    assert!(!feed.contains("Internal CA rotation"));
+    assert!(!feed.contains("keyward:8200"));
+
+    let response = internal_app(state)
+        .oneshot(get("/api/status"))
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let raw: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(raw["incidents"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn banner_precedence_critical_over_maintenance_over_ok() {
     let state = build_dev_state().await;
 
@@ -534,7 +649,9 @@ async fn banner_precedence_critical_over_maintenance_over_ok() {
         post_admin(
             "/admin/incidents",
             OPERATOR,
-            &format!("title=Total+outage&severity=critical&body=x&csrf_token={CSRF}"),
+            &format!(
+                "title=Total+outage&severity=critical&affected=Gateway&body=x&csrf_token={CSRF}"
+            ),
         ),
     )
     .await;
@@ -578,6 +695,10 @@ async fn rss_feed_is_well_formed_and_escaped() {
         .to_str()
         .unwrap()
         .starts_with("application/rss+xml"));
+    assert_eq!(
+        resp.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
@@ -594,8 +715,8 @@ async fn rss_feed_is_well_formed_and_escaped() {
             "/admin/incidents",
             OPERATOR,
             &format!(
-                "title=Cache+%26+CDN+%3Cdegraded%3E&severity=minor&body=5%25+errors+%26+retries\
-                 &csrf_token={CSRF}"
+                "title=Cache+%26+CDN+%3Cdegraded%3E&severity=minor&affected=Gateway\
+                 &body=5%25+errors+%26+retries&csrf_token={CSRF}"
             ),
         ),
     )

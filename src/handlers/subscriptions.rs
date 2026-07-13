@@ -12,13 +12,14 @@
 //! Everything interpolated into the rendered notices is HTML-escaped.
 
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Form;
 use serde::Deserialize;
 
 use crate::auth::new_csrf_token;
 use crate::handlers::{esc, hv, page_shell};
+use crate::notify;
 use crate::probe::parse_http_url;
 use crate::store::Subscriber;
 use crate::{now_secs, AppState};
@@ -42,10 +43,26 @@ pub async fn subscribe(
 ) -> Response {
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
     let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
+    if !state.config.public_webhooks_enabled {
+        return subscription_response(
+            StatusCode::NOT_FOUND,
+            page_shell(
+                loc,
+                theme,
+                "Webhook registration unavailable",
+                &notice(
+                    "Webhook registration unavailable",
+                    "<p class=\"hint\">Use the public <a href=\"/feed.xml\">RSS feed</a> or \
+                     <a href=\"/api/status\">JSON API</a> for status updates.</p>\
+                     <p class=\"hint--muted\"><a href=\"/status\">Back to status</a></p>",
+                ),
+            ),
+        );
+    }
     let target = form.target.trim();
     // Only http(s) webhooks; validate with the same minimal parser the prober/deliverer use.
     if target.is_empty() || target.len() > MAX_TARGET_LEN || parse_http_url(target).is_none() {
-        return Html(page_shell(
+        return subscription_response(StatusCode::OK, page_shell(
             loc,
             theme,
             "Subscribe",
@@ -55,8 +72,24 @@ pub async fn subscribe(
                  webhook URL to receive status updates.</p>\
                  <p class=\"hint--muted\"><a href=\"/status\">Back to status</a></p>",
             ),
-        ))
-        .into_response();
+        ));
+    }
+    if let Err(error) = notify::validate_target(target).await {
+        tracing::warn!(error = %error, "public webhook target rejected by egress policy");
+        return subscription_response(
+            StatusCode::OK,
+            page_shell(
+                loc,
+                theme,
+                "Subscribe",
+                &notice(
+                    "Webhook target unavailable",
+                    "<p class=\"hint\">The endpoint must resolve to a public Internet address. \
+                     Local, private, link-local, metadata, and special-use networks are not \
+                     accepted.</p><p class=\"hint--muted\"><a href=\"/status\">Back to status</a></p>",
+                ),
+            ),
+        );
     }
 
     let subscriber = Subscriber {
@@ -69,7 +102,10 @@ pub async fn subscribe(
         created_at: now_secs(),
     };
     state.store.insert_subscriber(&subscriber).await;
-    tracing::info!(id = subscriber.id, "webhook subscription created (unconfirmed)");
+    tracing::info!(
+        id = subscriber.id,
+        "webhook subscription created (unconfirmed)"
+    );
 
     let confirm = format!("/subscriptions/confirm?token={}", esc(&subscriber.id));
     let unsub = format!("/subscriptions/unsubscribe?token={}", esc(&subscriber.id));
@@ -91,7 +127,7 @@ pub async fn subscribe(
             unsub = unsub,
         ),
     );
-    Html(page_shell(loc, theme, "Subscribe", &inner)).into_response()
+    subscription_response(StatusCode::OK, page_shell(loc, theme, "Subscribe", &inner))
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,7 +160,10 @@ pub async fn confirm(
         }
         None => not_found_notice(),
     };
-    Html(page_shell(loc, theme, "Confirm subscription", &inner)).into_response()
+    subscription_response(
+        StatusCode::OK,
+        page_shell(loc, theme, "Confirm subscription", &inner),
+    )
 }
 
 /// `GET /subscriptions/unsubscribe?token=…` — remove a subscription by its capability token.
@@ -146,7 +185,19 @@ pub async fn unsubscribe(
         "<p class=\"hint\">You will no longer receive status updates at that endpoint.</p>\
          <p class=\"hint--muted\"><a href=\"/status\">Back to status</a></p>",
     );
-    Html(page_shell(loc, theme, "Unsubscribe", &inner)).into_response()
+    subscription_response(
+        StatusCode::OK,
+        page_shell(loc, theme, "Unsubscribe", &inner),
+    )
+}
+
+fn subscription_response(status: StatusCode, body: String) -> Response {
+    let mut response = Html(body).into_response();
+    *response.status_mut() = status;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// A single-card notice body for the standalone subscription pages.

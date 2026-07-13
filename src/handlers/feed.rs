@@ -8,10 +8,11 @@
 //! (`&<>"'` — a strict superset of XML's requirements).
 
 use axum::extract::State;
-use axum::http::header;
+use axum::http::{header, HeaderValue};
 use axum::response::{IntoResponse, Response};
 
 use crate::handlers::{esc, incident_status_label, month_abbr};
+use crate::model::project_public_timeline;
 use crate::AppState;
 
 /// Canonical public origin of the status page (Beacon serves `status.w33d.xyz` behind the
@@ -32,8 +33,13 @@ struct Entry {
 
 /// `GET /feed.xml` — RSS 2.0 of incident opens/updates/resolves, newest first (no auth).
 pub async fn feed_xml(State(state): State<AppState>) -> Response {
-    let incidents = state.store.list_incidents().await;
-    let updates = state.store.list_incident_updates().await;
+    let checks = state.store.list_checks().await;
+    let (incidents, updates) = project_public_timeline(
+        &checks,
+        &state.config.public_catalog,
+        state.store.list_incidents().await,
+        state.store.list_incident_updates().await,
+    );
 
     let mut entries = Vec::with_capacity(incidents.len() + updates.len());
     for inc in &incidents {
@@ -62,7 +68,10 @@ pub async fn feed_xml(State(state): State<AppState>) -> Response {
     entries.sort_by_key(|e| std::cmp::Reverse(e.ts));
     entries.truncate(MAX_ITEMS);
 
-    let last_build = entries.first().map(|e| e.ts).unwrap_or_else(crate::now_secs);
+    let last_build = entries
+        .first()
+        .map(|e| e.ts)
+        .unwrap_or_else(crate::now_secs);
     let mut items = String::new();
     for e in &entries {
         items.push_str(&format!(
@@ -96,11 +105,15 @@ pub async fn feed_xml(State(state): State<AppState>) -> Response {
         last_build = fmt_rfc822(last_build),
         items = items,
     );
-    (
+    let mut response = (
         [(header::CONTENT_TYPE, "application/rss+xml; charset=utf-8")],
         body,
     )
-        .into_response()
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Format epoch seconds as an RFC 822 date in GMT (RSS `pubDate` / `lastBuildDate`), e.g.

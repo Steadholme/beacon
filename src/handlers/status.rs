@@ -17,8 +17,8 @@ use crate::handlers::{
 };
 use crate::i18n;
 use crate::model::{
-    affected_names, build_status, day_bucket, day_date, group_rollup, maintenance_ongoing,
-    ComponentView, StatusView, DAY_SECS,
+    affected_names, build_public_status, build_status, day_bucket, day_date, group_rollup,
+    maintenance_ongoing, ComponentView, StatusView, DAY_SECS,
 };
 use crate::store::{Incident, IncidentUpdate};
 use crate::{now_secs, vitals, AppState};
@@ -37,13 +37,14 @@ pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> R
     let now = now_secs();
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
     let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
-    let mut view = build_status(state.store.as_ref(), now).await;
+    let mut view =
+        build_public_status(state.store.as_ref(), now, &state.config.public_catalog).await;
     attach_infra(&mut view, &state, now);
 
     let body = if is_wire_request(&headers) {
         render_status_live(&view, now, loc)
     } else {
-        render_status(&view, now, loc, theme)
+        render_status(&view, now, loc, theme, state.config.public_webhooks_enabled)
     };
     let mut response = Html(body).into_response();
     response
@@ -59,6 +60,21 @@ pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> R
 pub async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let now = now_secs();
     let _loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
+    let mut view =
+        build_public_status(state.store.as_ref(), now, &state.config.public_catalog).await;
+    attach_infra(&mut view, &state, now);
+    let mut response = Json(view).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// `GET /api/status` on the dedicated internal listener — the complete raw check model used by
+/// Portal Estate's server-side joins. This handler is intentionally absent from the public
+/// router and remains non-cacheable because it carries live operational data.
+pub async fn api_internal_status(State(state): State<AppState>) -> Response {
+    let now = now_secs();
     let mut view = build_status(state.store.as_ref(), now).await;
     attach_infra(&mut view, &state, now);
     let mut response = Json(view).into_response();
@@ -236,8 +252,22 @@ fn render_refresh(loc: odyssey::Locale) -> String {
     .0
 }
 
-fn render_status(view: &StatusView, now: i64, loc: odyssey::Locale, theme: &str) -> String {
+fn render_status(
+    view: &StatusView,
+    now: i64,
+    loc: odyssey::Locale,
+    theme: &str,
+    webhooks_enabled: bool,
+) -> String {
     let updated = rel_time_l(loc, view.updated_at, now);
+    let webhook_link = if webhooks_enabled {
+        format!(
+            r##"<a class="updates-pop__item" href="#subscribe">{}</a>"##,
+            esc(i18n::t(loc, "status.webhook"))
+        )
+    } else {
+        String::new()
+    };
     STATUS_HTML
         .replace("{{CSS}}", app_css())
         .replace("{{LANG}}", loc.bcp47())
@@ -258,11 +288,11 @@ fn render_status(view: &StatusView, now: i64, loc: odyssey::Locale, theme: &str)
         )
         .replace("{{REFRESH}}", &render_refresh(loc))
         .replace("{{GET_UPDATES}}", i18n::t(loc, "status.get_updates"))
-        .replace("{{WEBHOOK}}", i18n::t(loc, "status.webhook"))
+        .replace("{{WEBHOOK_LINK}}", &webhook_link)
         .replace("{{RSS_FEED}}", i18n::t(loc, "status.rss_feed"))
         .replace("{{JSON_API}}", i18n::t(loc, "status.json_api"))
         .replace("{{STATUS_LIVE}}", &render_status_live(view, now, loc))
-        .replace("{{SUBSCRIBE}}", &render_subscribe(loc))
+        .replace("{{SUBSCRIBE}}", &render_subscribe(loc, webhooks_enabled))
         .replace("{{FOOTER}}", i18n::t(loc, "status.footer"))
         .replace("{{RSS}}", i18n::t(loc, "status.rss"))
         .replace(
@@ -278,6 +308,7 @@ fn render_status_live(view: &StatusView, now: i64, loc: odyssey::Locale) -> Stri
     format!(
         r#"<div id="{id}" class="status-live" role="region" aria-label="{label}">
 {banner}
+{snapshot}
 {active}
 {maintenance}
 <section class="card">
@@ -292,6 +323,7 @@ fn render_status_live(view: &StatusView, now: i64, loc: odyssey::Locale) -> Stri
         id = STATUS_LIVE_ID,
         label = esc(i18n::t(loc, "status.live_region")),
         banner = render_hero(view, now, loc),
+        snapshot = render_snapshot(view, loc),
         active = render_active_incidents(view, now, loc),
         maintenance = render_maintenances(view, now, loc),
         components_title = esc(i18n::t(loc, "status.components")),
@@ -302,6 +334,36 @@ fn render_status_live(view: &StatusView, now: i64, loc: odyssey::Locale) -> Stri
         history_note = esc(i18n::t(loc, "status.history_note")),
         rss_feed = esc(i18n::t(loc, "status.rss_feed")),
         past_incidents = render_past_incidents(view, now, loc),
+    )
+}
+
+fn render_snapshot(view: &StatusView, loc: odyssey::Locale) -> String {
+    let active = view
+        .incidents
+        .iter()
+        .filter(|incident| incident.status != "resolved")
+        .count();
+    let elevated = if active > 0 {
+        " bc-snapshot__n--warn"
+    } else {
+        ""
+    };
+    format!(
+        r#"<section class="bc-snapshot" aria-label="{label}">
+  <div class="bc-snapshot__item"><strong class="bc-snapshot__n">{services}</strong><span>{services_label}</span></div>
+  <div class="bc-snapshot__item"><strong class="bc-snapshot__n{elevated}">{active}</strong><span>{incidents_label}</span></div>
+  <div class="bc-snapshot__item"><strong class="bc-snapshot__n">{maintenance}</strong><span>{maintenance_label}</span></div>
+  <div class="bc-snapshot__item"><strong class="bc-snapshot__n">{days}</strong><span>{evidence_label}</span></div>
+</section>"#,
+        label = esc(i18n::t(loc, "status.snapshot.label")),
+        services = view.components.len(),
+        services_label = esc(i18n::t(loc, "status.snapshot.services")),
+        active = active,
+        incidents_label = esc(i18n::t(loc, "status.snapshot.incidents")),
+        maintenance = view.maintenances.len(),
+        maintenance_label = esc(i18n::t(loc, "status.snapshot.maintenance")),
+        days = view.history_days,
+        evidence_label = esc(i18n::t(loc, "status.snapshot.evidence")),
     )
 }
 
@@ -515,7 +577,8 @@ fn render_component_row(
     team_first_day: Option<i64>,
 ) -> String {
     let first_data_idx = c.days.iter().position(|d| d.uptime.is_some());
-    let first_day = first_data_idx.map(|idx| day_bucket(now) - 89 + idx as i64);
+    let first_day = first_data_idx
+        .map(|idx| day_bucket(now) - c.days.len().saturating_sub(1) as i64 + idx as i64);
     let monitoring_since = first_day.map(|day| fmt_date_l(loc, day * DAY_SECS));
 
     let mut bars = String::new();
@@ -624,7 +687,7 @@ fn component_first_data_day(c: &ComponentView, now: i64) -> Option<i64> {
     c.days
         .iter()
         .position(|d| d.uptime.is_some())
-        .map(|idx| day_bucket(now) - 89 + idx as i64)
+        .map(|idx| day_bucket(now) - c.days.len().saturating_sub(1) as i64 + idx as i64)
 }
 
 fn team_first_data_day(view: &StatusView, now: i64) -> Option<i64> {
@@ -658,15 +721,33 @@ fn render_barlegend(
         .map(|day| format!(" · Monitoring since {}", fmt_date_l(loc, day * DAY_SECS)))
         .unwrap_or_default();
     format!(
-        r#"<div class="bc-barlegend"><span>90 days ago</span><span class="bc-barlegend__mid">{mid}{since}</span><span>Today</span></div>"#,
+        r#"<div class="bc-barlegend"><span>{days} days ago</span><span class="bc-barlegend__mid">{mid}{since}</span><span>Today</span></div>"#,
+        days = view.history_days,
         mid = esc(&mid),
         since = esc(&since),
     )
 }
 
-/// The public "Subscribe to updates" card: a webhook URL form posting to `/subscriptions`.
-/// Public (no CSRF); double opt-in confirmation gates any delivery.
-fn render_subscribe(loc: odyssey::Locale) -> String {
+/// Public update channels. RSS and JSON are always available. Anonymous webhook registration
+/// only appears when the operator explicitly enables the hardened egress path.
+fn render_subscribe(loc: odyssey::Locale, webhooks_enabled: bool) -> String {
+    if !webhooks_enabled {
+        return format!(
+            r#"<section class="card bc-channels" id="subscribe">
+  <div class="card__head"><h2>{title}</h2></div>
+  <div class="card__body">
+    <p class="hint">{body}</p>
+    <div class="bc-channels__links"><a class="btn btn-secondary" href="/feed.xml">{rss}</a><a class="btn btn-secondary" href="/api/status">{json}</a></div>
+    <p class="hint--muted">{note}</p>
+  </div>
+</section>"#,
+            title = esc(i18n::t(loc, "status.subscribe.title")),
+            body = esc(i18n::t(loc, "status.channels.body")),
+            rss = esc(i18n::t(loc, "status.rss_feed")),
+            json = esc(i18n::t(loc, "status.json_api")),
+            note = esc(i18n::t(loc, "status.channels.webhook_unavailable")),
+        );
+    }
     format!(
         r#"<section class="card" id="subscribe">
   <div class="card__head"><h2>{title}</h2></div>
@@ -743,7 +824,7 @@ fn render_infra(loc: odyssey::Locale, infra: Option<&vitals::InfraPublic>, now: 
     )
 }
 
-fn infra_metric_label<'a>(loc: odyssey::Locale, metric: &'a str) -> &'a str {
+fn infra_metric_label(loc: odyssey::Locale, metric: &str) -> &str {
     match metric {
         "cpu" => i18n::t(loc, "infra.metric.cpu"),
         "memory" => i18n::t(loc, "infra.metric.memory"),
@@ -921,23 +1002,28 @@ fn render_maintenances(view: &StatusView, now: i64, loc: odyssey::Locale) -> Str
     out
 }
 
-/// "Past incidents": fixed calendar buckets for the last 14 days, newest day first.
+/// "Past incidents": only days with public incidents are rendered. A single all-clear row
+/// replaces fourteen repetitive empty buckets, keeping the incident evidence scannable.
 fn render_past_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     let mut out = String::new();
     let today = day_bucket(now);
+    let mut rendered_days = 0usize;
     for offset in 0..14 {
         let day = today - offset;
+        let incidents: Vec<_> = view
+            .incidents
+            .iter()
+            .filter(|inc| day_bucket(inc.created_at) == day)
+            .collect();
+        if incidents.is_empty() {
+            continue;
+        }
+        rendered_days += 1;
         out.push_str(&format!(
             r#"<div class="day-group"><h3 class="day-group__date">{}</h3>"#,
             esc(&fmt_date_l(loc, day * DAY_SECS)),
         ));
-        let mut count = 0usize;
-        for inc in view
-            .incidents
-            .iter()
-            .filter(|inc| day_bucket(inc.created_at) == day)
-        {
-            count += 1;
+        for inc in incidents {
             let resolved = inc.status == "resolved";
             let mut when = if resolved && inc.resolved_at > 0 {
                 format!(
@@ -968,13 +1054,13 @@ fn render_past_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> S
                 when = esc(&when),
             ));
         }
-        if count == 0 {
-            out.push_str(&format!(
-                r#"<p class="day-group__none">{}</p>"#,
-                esc(i18n::t(loc, "status.none_day"))
-            ));
-        }
         out.push_str("</div>");
+    }
+    if rendered_days == 0 {
+        out.push_str(&format!(
+            r#"<div class="bc-history-clear"><span class="empty__ok" aria-hidden="true"></span><p>{}</p></div>"#,
+            esc(i18n::t(loc, "status.none_history"))
+        ));
     }
     out
 }

@@ -101,6 +101,17 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Trusted service-to-service router for the separate internal listener. Network isolation is
+/// the authentication boundary: production exposes this port only on the Docker `holdfast`
+/// network and Sluice never routes to it. Keeping this a different Router makes it impossible
+/// for the public listener to accidentally match the raw status route.
+pub fn internal_app(state: AppState) -> Router {
+    Router::new()
+        .route("/healthz", get(handlers::health::healthz))
+        .route("/api/status", get(handlers::status::api_internal_status))
+        .with_state(state)
+}
+
 /// Build dev state from an explicit [`Config`]: an empty [`InMemoryStore`] seeded with the
 /// config's checks. Used by `main`'s memory mode and the integration tests, so they need no
 /// database.

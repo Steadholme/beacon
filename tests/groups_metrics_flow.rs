@@ -1,9 +1,7 @@
 //! End-to-end component-groups + response-time-metrics contract test (in-memory store).
 //!
-//! Drives the real Router: an operator creates groups and assigns components (CSRF-protected),
-//! the public page then renders grouped sections with a rolled-up status pill (worst member
-//! wins) plus a "Other" section for ungrouped components, and each component carries a
-//! compact response-time aggregate derived from the `check_results` latency window.
+//! Drives the real Router: database groups remain an internal operator concern while the
+//! explicit public catalog owns stable public sections and rollups.
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
@@ -51,32 +49,29 @@ fn post_admin(uri: &str, form: &str) -> Request<Body> {
 async fn groups_render_sections_with_rollup_pill() {
     let state = build_dev_state().await; // seeds Gateway, Identity, CA.
 
-    // Create a group.
+    // Create a raw database group and place the internal CA probe in it. This must not affect
+    // or leak into the catalog-owned public grouping.
     let (status, _) = call(
         &state,
         post_admin(
             "/admin/groups",
-            &format!("name=Apps&position=0&csrf_token={CSRF}"),
+            &format!("name=Secret+operators&position=0&csrf_token={CSRF}"),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let groups = state.store.list_component_groups().await;
     assert_eq!(groups.len(), 1);
-    let apps_id = groups[0].id.clone();
-
-    // Assign Gateway + Identity to "Apps"; leave CA ungrouped.
-    for comp in ["Gateway", "Identity"] {
-        let (status, _) = call(
-            &state,
-            post_admin(
-                "/admin/groups/assign",
-                &format!("check_name={comp}&group_id={apps_id}&csrf_token={CSRF}"),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
-    }
+    let secret_id = groups[0].id.clone();
+    let (status, _) = call(
+        &state,
+        post_admin(
+            "/admin/groups/assign",
+            &format!("check_name=CA&group_id={secret_id}&csrf_token={CSRF}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
 
     // Gateway is down (latest failing) while Identity is up -> group rollup is worst = down.
     let now = now_secs();
@@ -89,18 +84,17 @@ async fn groups_render_sections_with_rollup_pill() {
         .insert_result("Identity", true, 12, now - 5)
         .await;
 
-    // Public page: grouped section "Apps" with a down rollup pill + an "Other" section for CA.
+    // Public page: the default catalog's Core group rolls up Gateway + Identity. Neither the
+    // raw group nor CA crosses the public projection boundary.
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK);
     let html = text(&body);
     assert!(
-        html.contains(r#"class="cgroup__name">Apps"#),
-        "Apps section header"
+        html.contains(r#"class="cgroup__name">Core"#),
+        "catalog-owned Core section header"
     );
-    assert!(
-        html.contains(r#"class="cgroup__name">Other"#),
-        "ungrouped -> Other section"
-    );
+    assert!(!html.contains("Secret operators"));
+    assert!(!html.contains(r#"title="CA""#));
     assert!(
         html.contains(r#"<details class="cgroup" open>"#),
         "non-operational group starts open"
@@ -116,7 +110,7 @@ async fn groups_render_sections_with_rollup_pill() {
     let v: Value = serde_json::from_slice(&body).unwrap();
     let grp = v["groups"].as_array().unwrap();
     assert_eq!(grp.len(), 1);
-    assert_eq!(grp[0]["name"], "Apps");
+    assert_eq!(grp[0]["name"], "Core");
     assert_eq!(grp[0]["status"], "down", "worst-member rollup");
     let gw = v["components"]
         .as_array()
@@ -124,14 +118,12 @@ async fn groups_render_sections_with_rollup_pill() {
         .iter()
         .find(|c| c["name"] == "Gateway")
         .unwrap();
-    assert_eq!(gw["group_id"], apps_id);
-    let ca = v["components"]
+    assert_eq!(gw["group_id"], "public-group-1");
+    assert!(v["components"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["name"] == "CA")
-        .unwrap();
-    assert!(ca["group_id"].is_null(), "CA stays ungrouped");
+        .all(|component| component["name"] != "CA"));
 }
 
 #[tokio::test]

@@ -113,17 +113,40 @@
 
 /* Overall status banner. */
 .status-hero {
+  position: relative; overflow: hidden;
   display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap;
-  padding: 18px 22px; border-radius: var(--radius); margin-bottom: 24px; color: #fff;
+  padding: 24px 26px; border-radius: 16px; margin-bottom: 12px; color: #fff;
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+.status-hero::after {
+  content: ""; position: absolute; inset: 0 0 0 auto; width: 42%; pointer-events: none;
+  background: repeating-linear-gradient(120deg, transparent 0 14px, rgba(255,255,255,.06) 14px 15px);
+  mask-image: linear-gradient(to left, #000, transparent);
 }
 .status-hero--ok { background: var(--ok-ink); }
 .status-hero--warn { background: var(--warn-ink); }
 .status-hero--down { background: var(--down-ink); }
 .status-hero--info { background: var(--accent-2); }
-.status-hero__headline { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.015em; color: #fff; }
+.status-hero__headline { margin: 0; font-size: clamp(18px, 2.2vw, 24px); font-weight: 650; letter-spacing: -.025em; color: #fff; }
 .status-hero__sub { margin: 3px 0 0; font-size: 12.5px; color: rgba(255,255,255,.92); }
 .status-hero__meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12.5px; color: rgba(255,255,255,.92); text-align: right; }
 .status-hero__uptime strong { font-family: var(--mono); font-weight: 600; color: #fff; }
+
+/* A compact operational ledger directly under the banner: current incidents lead the page,
+   while component evidence remains one native-details interaction away. */
+.bc-snapshot {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  box-shadow: var(--sh-xs); margin: 0 0 26px; overflow: hidden;
+}
+.bc-snapshot__item { min-width: 0; padding: 13px 16px; border-left: 1px solid var(--border); }
+.bc-snapshot__item:first-child { border-left: 0; }
+.bc-snapshot__item span { display: block; margin-top: 1px; color: var(--ink-3); font-size: 11.5px; }
+.bc-snapshot__n { display: block; color: var(--ink); font-family: var(--mono); font-size: 18px; line-height: 1.2; }
+.bc-snapshot__n--warn { color: var(--warn-ink); }
+.bc-history-clear { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.bc-history-clear p { margin: 0; color: var(--ink-2); font-size: 13px; }
+.bc-channels__links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 
 /* Component groups and 90-day uptime bars. */
 .card__head--split { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -193,6 +216,10 @@
   .statushead { flex-direction: column; }
   .statushead__actions { width: 100%; flex-wrap: wrap; }
   .status-hero__meta { align-items: flex-start; text-align: left; }
+  .status-hero { padding: 20px; border-radius: 12px; }
+  .bc-snapshot { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bc-snapshot__item:nth-child(3) { border-left: 0; border-top: 1px solid var(--border); }
+  .bc-snapshot__item:nth-child(4) { border-top: 1px solid var(--border); }
   .crow { grid-template-columns: 1fr auto; row-gap: 6px; padding: 12px 2px; }
   .crow__id { grid-column: 1; grid-row: 1; }
   .crow__state { grid-column: 2; grid-row: 1; }

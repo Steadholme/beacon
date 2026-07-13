@@ -11,13 +11,14 @@
 //! sha256=<hex>` header so the endpoint can verify authenticity. The HTTP client reuses the
 //! dependency-light raw-TCP + `tokio-rustls` transport from [`crate::probe`] (no reqwest).
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{lookup_host, TcpStream};
 
 use crate::probe::{parse_http_url, tls_connector};
 use crate::store::{Incident, IncidentUpdate, Store};
@@ -39,7 +40,8 @@ pub const EVENT_UPDATED: &str = "incident.updated";
 /// in the `X-Beacon-Signature` header so a subscriber can verify the payload's authenticity.
 pub fn sign(secret: &str, body: &str) -> String {
     // HMAC accepts any key length, so `new_from_slice` never errors here.
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(body.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
@@ -119,7 +121,12 @@ pub async fn deliver(
 async fn post_json(url: &str, event: &str, signature: &str, body: &str) -> std::io::Result<u16> {
     let (tls, host, port, path) =
         parse_http_url(url).ok_or_else(|| io_err("invalid webhook target URL"))?;
-    let tcp = TcpStream::connect((host.as_str(), port)).await?;
+    reject_header_controls(&host, &path)?;
+    // Resolve first, reject the entire answer set if it contains a non-public address, then
+    // connect to one of those exact SocketAddrs. This pins the validated DNS result and closes
+    // the classic resolve-check/re-resolve-connect SSRF race.
+    let addresses = resolve_public_addrs(&host, port).await?;
+    let tcp = connect_validated(&addresses).await?;
     if tls {
         let server_name = rustls::pki_types::ServerName::try_from(host.clone())
             .map_err(|_| io_err("invalid TLS server name"))?;
@@ -128,6 +135,99 @@ async fn post_json(url: &str, event: &str, signature: &str, body: &str) -> std::
     } else {
         send_recv(tcp, &host, &path, event, signature, body).await
     }
+}
+
+/// Validate a subscriber-controlled target at registration time. Delivery repeats the same
+/// check and pins its own DNS result, so a later rebinding cannot inherit this decision.
+pub async fn validate_target(url: &str) -> std::io::Result<()> {
+    let (_, host, port, path) =
+        parse_http_url(url).ok_or_else(|| io_err("invalid webhook target URL"))?;
+    reject_header_controls(&host, &path)?;
+    resolve_public_addrs(&host, port).await.map(|_| ())
+}
+
+fn reject_header_controls(host: &str, path: &str) -> std::io::Result<()> {
+    if host.chars().any(char::is_control) || path.chars().any(char::is_control) {
+        return Err(io_err("webhook target contains control characters"));
+    }
+    Ok(())
+}
+
+async fn resolve_public_addrs(host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
+    let mut addresses: Vec<_> = lookup_host((host, port)).await?.collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() {
+        return Err(io_err("webhook target did not resolve"));
+    }
+    if let Some(address) = addresses
+        .iter()
+        .find(|address| !is_public_webhook_ip(address.ip()))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "webhook target resolved to prohibited address {}",
+                address.ip()
+            ),
+        ));
+    }
+    Ok(addresses)
+}
+
+async fn connect_validated(addresses: &[SocketAddr]) -> std::io::Result<TcpStream> {
+    let mut last_error = None;
+    for &address in addresses {
+        match TcpStream::connect(address).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| io_err("webhook target had no validated addresses")))
+}
+
+/// Conservative internet-egress allowlist. Besides the explicitly required local/private/
+/// metadata classes, reject special-use ranges that should never be valid webhook origins.
+pub fn is_public_webhook_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_public_v4(ip),
+        IpAddr::V6(ip) => is_public_v6(ip),
+    }
+}
+
+fn is_public_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(a == 0
+        || ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        // Carrier-grade NAT, protocol assignments, benchmarking, and reserved/future-use.
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 198 && (b == 18 || b == 19))
+        || a >= 240)
+}
+
+fn is_public_v6(ip: Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_public_v4(v4);
+    }
+    let segments = ip.segments();
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_multicast()
+        || ip.is_unique_local()
+        || ip.is_unicast_link_local()
+        // IPv4-compatible ::/96 is special-use and can bypass naive IPv6 classifiers.
+        || segments[..6].iter().all(|segment| *segment == 0)
+        // Documentation (2001:db8::/32), benchmarking (2001:2::/48), deprecated site-local.
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+        || (segments[0] == 0x2001 && segments[1] == 0x0002 && segments[2] == 0)
+        || (segments[0] & 0xffc0) == 0xfec0)
 }
 
 /// Write a minimal HTTP/1.1 POST over `stream` and parse the status code from the first line.
@@ -220,16 +320,64 @@ mod tests {
         };
         let body = incident_body(EVENT_OPENED, &inc, None, 123);
         // Structural JSON escaping: the embedded quote is backslash-escaped in the raw bytes.
-        assert!(body.contains(r#"Cache \"CDN\" degraded"#), "quotes are JSON-escaped");
+        assert!(
+            body.contains(r#"Cache \"CDN\" degraded"#),
+            "quotes are JSON-escaped"
+        );
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["event"], "incident.opened");
         assert_eq!(v["sent_at"], 123);
-        assert_eq!(v["incident"]["title"], "Cache \"CDN\" degraded", "round-trips exactly");
+        assert_eq!(
+            v["incident"]["title"], "Cache \"CDN\" degraded",
+            "round-trips exactly"
+        );
         assert_eq!(v["incident"]["severity"], "major");
         assert_eq!(v["page_url"], "https://status.w33d.xyz/status");
         assert!(v["update"].is_null(), "no update on an open event");
         // The signature is computed over these exact bytes and is deterministic.
         let sig = sign("s3cr3t", &body);
         assert_eq!(sig, sign("s3cr3t", &body));
+    }
+
+    #[test]
+    fn webhook_egress_rejects_local_private_metadata_and_special_use_ips() {
+        for ip in [
+            "0.0.0.0",
+            "0.1.2.3",
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "224.0.0.1",
+            "::",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "::127.0.0.1",
+        ] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(!is_public_webhook_ip(ip), "{ip} must be denied");
+        }
+        for ip in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(is_public_webhook_ip(ip), "{ip} should be public");
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_rejects_loopback_before_connecting() {
+        let error = deliver(
+            "http://127.0.0.1:9/hook",
+            EVENT_OPENED,
+            "signature",
+            "{}",
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 }

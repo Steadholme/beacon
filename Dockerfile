@@ -41,7 +41,7 @@ COPY --from=builder /build/target/release/beacon /usr/local/bin/beacon
 USER beacon
 # Default in-container bind; overridable at runtime.
 ENV BIND_ADDR=0.0.0.0:8400
-EXPOSE 8400
+EXPOSE 8400 8401
 
 # Dependency-free liveness probe -> GET /healthz on the loopback, exit 0/1.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 \

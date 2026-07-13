@@ -37,12 +37,41 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("failed to bind {addr}: {e}"));
 
+    let internal_listener = match state.config.internal_bind_addr.as_deref() {
+        Some(raw) => {
+            let internal_addr: SocketAddr = raw
+                .parse()
+                .unwrap_or_else(|e| panic!("invalid BEACON_INTERNAL_BIND_ADDR {raw}: {e}"));
+            let listener = tokio::net::TcpListener::bind(internal_addr)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("failed to bind internal listener {internal_addr}: {e}")
+                });
+            Some((internal_addr, listener))
+        }
+        None => None,
+    };
+
     // Spawn the monitor loop (sweeps immediately, then every CHECK_INTERVAL).
     tokio::spawn(beacon::monitor::run_monitor(state.clone()));
 
-    let app = beacon::app(state);
+    let app = beacon::app(state.clone());
     tracing::info!(%addr, "Beacon listening (uptime monitoring + public status page)");
-    axum::serve(listener, app).await.expect("server error");
+    match internal_listener {
+        Some((internal_addr, internal_listener)) => {
+            let internal = beacon::internal_app(state);
+            tracing::info!(%internal_addr, "Beacon trusted internal status listener ready");
+            tokio::select! {
+                result = axum::serve(listener, app) => result.expect("public server error"),
+                result = axum::serve(internal_listener, internal) => {
+                    result.expect("internal server error")
+                },
+            }
+        }
+        None => axum::serve(listener, app)
+            .await
+            .expect("public server error"),
+    }
 }
 
 /// GET `/healthz` over a raw TCP socket. Returns process exit code (0 = healthy).

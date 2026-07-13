@@ -18,9 +18,10 @@ use beacon::{monitor, now_secs, state_with};
 
 /// Start a local test server on an ephemeral port; returns its address.
 async fn spawn_test_server() -> SocketAddr {
-    let app = Router::new()
-        .route("/", get(|| async { "ok" }))
-        .route("/down", get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "bad") }));
+    let app = Router::new().route("/", get(|| async { "ok" })).route(
+        "/down",
+        get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "bad") }),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -134,10 +135,19 @@ async fn mixed_results_drive_degraded_status() {
     let now = now_secs();
     // 99 ok + 2 down within the 24h window -> ~98.04% -> degraded (currently up).
     for i in 0..99 {
-        state.store.insert_result("Flappy", true, 10, now - 1000 + i).await;
+        state
+            .store
+            .insert_result("Flappy", true, 10, now - 1000 + i)
+            .await;
     }
-    state.store.insert_result("Flappy", false, 10, now - 50).await;
-    state.store.insert_result("Flappy", false, 10, now - 40).await;
+    state
+        .store
+        .insert_result("Flappy", false, 10, now - 50)
+        .await;
+    state
+        .store
+        .insert_result("Flappy", false, 10, now - 40)
+        .await;
     state.store.insert_result("Flappy", true, 10, now).await; // currently up
 
     let view = build_status(state.store.as_ref(), now).await;

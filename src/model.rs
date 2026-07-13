@@ -11,7 +11,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::store::{ComponentGroup, Incident, IncidentUpdate, Maintenance, Store};
+use crate::config::PublicComponent;
+use crate::store::{Check, ComponentGroup, Incident, IncidentUpdate, Maintenance, Store};
 use crate::vitals;
 
 /// Rolling-uptime windows, in seconds.
@@ -29,6 +30,9 @@ pub const WINDOW_SPARK: i64 = SPARK_BUCKET_SECS * SPARK_BUCKETS;
 pub const DAY_SECS: i64 = 86_400;
 /// How many daily bars the status page renders per component.
 pub const BAR_DAYS: i64 = 90;
+/// Compact history carried by the public read model. The 90-day rolling percentage remains
+/// available, while the default HTML/JSON payload only ships the recent daily evidence.
+pub const PUBLIC_BAR_DAYS: i64 = 30;
 /// "Past incidents" horizon on the public page, in seconds (14 days).
 pub const WINDOW_14D: i64 = 1_209_600;
 
@@ -152,6 +156,8 @@ pub struct GroupView {
 pub struct StatusView {
     pub overall: &'static str,
     pub updated_at: i64,
+    /// Number of daily buckets carried in each component's `days` array.
+    pub history_days: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub infra: Option<vitals::InfraPublic>,
     pub components: Vec<ComponentView>,
@@ -246,8 +252,19 @@ pub fn component_status(latest_ok: Option<bool>, uptime_24h: f64) -> Status {
 /// Build one component's [`BAR_DAYS`]-long bar row (oldest first) from the daily buckets,
 /// filling days with no recorded results as `unknown`.
 pub fn build_days(buckets: &HashMap<i64, (i64, i64)>, today: i64) -> Vec<DayStat> {
-    let mut days = Vec::with_capacity(BAR_DAYS as usize);
-    for day in (today - BAR_DAYS + 1)..=today {
+    build_days_for(buckets, today, BAR_DAYS)
+}
+
+/// Build a caller-selected daily history window. Public status uses 30 days while the raw
+/// compatibility model retains the original 90-day window.
+pub fn build_days_for(
+    buckets: &HashMap<i64, (i64, i64)>,
+    today: i64,
+    history_days: i64,
+) -> Vec<DayStat> {
+    let history_days = history_days.max(1);
+    let mut days = Vec::with_capacity(history_days as usize);
+    for day in (today - history_days + 1)..=today {
         let (total, up) = buckets.get(&day).copied().unwrap_or((0, 0));
         days.push(DayStat {
             date: day_date(day),
@@ -292,28 +309,223 @@ pub fn build_latency_points(
     points
 }
 
-/// Build the full [`StatusView`] from the store as of `now` (epoch seconds). Only enabled
-/// checks appear on the public surface.
-///
-/// Overall-banner precedence (worst wins): a component that is down / an active critical
-/// incident force "down"; a degraded component / an active major-or-minor incident force
-/// "degraded"; an ongoing maintenance forces "maintenance"; otherwise "operational".
-/// Components named in an ongoing maintenance window are MASKED to `maintenance` — they
-/// render a maintenance pill instead of down and never drag the banner below maintenance.
+#[derive(Clone, Debug)]
+struct ComponentProjection {
+    name: String,
+    kind: String,
+    raw_names: Vec<String>,
+    group_id: Option<String>,
+}
+
+/// Build the original operator-oriented model: every enabled check appears 1:1 and database
+/// groups are preserved. Kept for monitor/admin compatibility and unit tests. Public handlers
+/// MUST use [`build_public_status`] instead.
 pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
+    let projections: Vec<_> = store
+        .list_checks()
+        .await
+        .into_iter()
+        .filter(|check| check.enabled)
+        .map(|check| ComponentProjection {
+            name: check.name.clone(),
+            kind: check.kind,
+            raw_names: vec![check.name],
+            group_id: check.group_id,
+        })
+        .collect();
+    let groups: Vec<_> = store
+        .list_component_groups()
+        .await
+        .into_iter()
+        .map(|g: ComponentGroup| GroupView {
+            id: g.id,
+            name: g.name,
+            position: g.position,
+            status: Status::Operational.as_str(),
+        })
+        .collect();
+    build_projected_status(
+        store,
+        now,
+        projections,
+        groups,
+        store.list_incidents().await,
+        store.list_incident_updates().await,
+        store.list_maintenances().await,
+        BAR_DAYS,
+    )
+    .await
+}
+
+/// Build the only model allowed on anonymous surfaces. The projection is explicit and
+/// fail-closed: adding/enabling a raw check never publishes it. Each public component may roll
+/// up one or more raw probes; the public `name` remains stable for Manifest/Portal joins.
+pub async fn build_public_status(
+    store: &dyn Store,
+    now: i64,
+    catalog: &[PublicComponent],
+) -> StatusView {
+    let checks = store.list_checks().await;
+    let (projections, groups) = public_projections(&checks, catalog);
+    let incidents = store.list_incidents().await;
+    let updates = store.list_incident_updates().await;
+    let maintenances = store.list_maintenances().await;
+    let (incidents, updates) = project_public_timeline_from(&projections, incidents, updates);
+    let maintenances = project_public_maintenances_from(&projections, maintenances);
+    build_projected_status(
+        store,
+        now,
+        projections,
+        groups,
+        incidents,
+        updates,
+        maintenances,
+        PUBLIC_BAR_DAYS,
+    )
+    .await
+}
+
+/// Project incidents and updates without building uptime metrics. RSS uses this seam so it
+/// applies the exact same no-internal-name boundary as HTML/JSON.
+pub fn project_public_timeline(
+    checks: &[Check],
+    catalog: &[PublicComponent],
+    incidents: Vec<Incident>,
+    updates: Vec<IncidentUpdate>,
+) -> (Vec<Incident>, Vec<IncidentUpdate>) {
+    let (projections, _) = public_projections(checks, catalog);
+    project_public_timeline_from(&projections, incidents, updates)
+}
+
+fn public_projections(
+    checks: &[Check],
+    catalog: &[PublicComponent],
+) -> (Vec<ComponentProjection>, Vec<GroupView>) {
+    let enabled: HashSet<&str> = checks
+        .iter()
+        .filter(|check| check.enabled)
+        .map(|check| check.name.as_str())
+        .collect();
+    let mut projections = Vec::new();
+    let mut groups = Vec::new();
+    let mut group_ids: HashMap<&str, String> = HashMap::new();
+
+    for entry in catalog {
+        let raw_names: Vec<String> = entry
+            .checks
+            .iter()
+            .filter(|name| enabled.contains(name.as_str()))
+            .cloned()
+            .collect();
+        // A configured component with no enabled backing probe is omitted, not reported as a
+        // misleading 100% nominal service.
+        if raw_names.is_empty() {
+            continue;
+        }
+        let group_id = match group_ids.get(entry.group.as_str()) {
+            Some(id) => id.clone(),
+            None => {
+                let id = format!("public-group-{}", groups.len() + 1);
+                group_ids.insert(entry.group.as_str(), id.clone());
+                groups.push(GroupView {
+                    id: id.clone(),
+                    name: entry.group.clone(),
+                    position: groups.len() as i64,
+                    status: Status::Operational.as_str(),
+                });
+                id
+            }
+        };
+        projections.push(ComponentProjection {
+            name: entry.name.clone(),
+            kind: "service".to_string(),
+            raw_names,
+            group_id: Some(group_id),
+        });
+    }
+    (projections, groups)
+}
+
+fn project_affected(affected: &str, projections: &[ComponentProjection]) -> Option<String> {
+    let raw: HashSet<String> = affected_names(affected).into_iter().collect();
+    if raw.is_empty() {
+        return None;
+    }
+    let public: Vec<&str> = projections
+        .iter()
+        .filter(|projection| {
+            raw.contains(&projection.name)
+                || projection.raw_names.iter().any(|name| raw.contains(name))
+        })
+        .map(|projection| projection.name.as_str())
+        .collect();
+    (!public.is_empty()).then(|| public.join(", "))
+}
+
+fn project_public_timeline_from(
+    projections: &[ComponentProjection],
+    incidents: Vec<Incident>,
+    updates: Vec<IncidentUpdate>,
+) -> (Vec<Incident>, Vec<IncidentUpdate>) {
+    let incidents: Vec<_> = incidents
+        .into_iter()
+        .filter_map(|mut incident| {
+            incident.affected = project_affected(&incident.affected, projections)?;
+            Some(incident)
+        })
+        .collect();
+    let ids: HashSet<&str> = incidents
+        .iter()
+        .map(|incident| incident.id.as_str())
+        .collect();
+    let updates = updates
+        .into_iter()
+        .filter(|update| ids.contains(update.incident_id.as_str()))
+        .collect();
+    (incidents, updates)
+}
+
+fn project_public_maintenances_from(
+    projections: &[ComponentProjection],
+    maintenances: Vec<Maintenance>,
+) -> Vec<Maintenance> {
+    maintenances
+        .into_iter()
+        .filter_map(|mut maintenance| {
+            maintenance.affected = project_affected(&maintenance.affected, projections)?;
+            Some(maintenance)
+        })
+        .collect()
+}
+
+/// Shared rollup engine used by both the raw operator model and the explicit public model.
+///
+/// Overall-banner precedence (worst wins): a projected component that is down / an active
+/// critical incident force "down"; degraded / major-or-minor force "degraded"; ongoing
+/// maintenance forces "maintenance"; otherwise "operational".
+#[allow(clippy::too_many_arguments)]
+async fn build_projected_status(
+    store: &dyn Store,
+    now: i64,
+    projections: Vec<ComponentProjection>,
+    mut groups: Vec<GroupView>,
+    incidents: Vec<Incident>,
+    updates: Vec<IncidentUpdate>,
+    maintenances: Vec<Maintenance>,
+    history_days: i64,
+) -> StatusView {
     let mut components = Vec::new();
     let mut overall = Status::Operational;
 
-    let maintenances = store.list_maintenances().await;
     let under_maintenance: HashSet<String> = maintenances
         .iter()
         .filter(|m| maintenance_ongoing(m, now))
         .flat_map(|m| affected_names(&m.affected))
         .collect();
 
-    // The 90-day bar grid for EVERY component in ONE aggregate query, keyed (name, day).
+    // Daily aggregate for every raw probe in one query; only projected buckets are serialized.
     let today = day_bucket(now);
-    let bar_since = (today - BAR_DAYS + 1) * DAY_SECS;
+    let bar_since = (today - history_days.max(1) + 1) * DAY_SECS;
     let mut daily: HashMap<String, HashMap<i64, (i64, i64)>> = HashMap::new();
     for row in store.daily_uptime(bar_since).await {
         daily
@@ -321,8 +533,6 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
             .or_default()
             .insert(row.day, (row.total, row.up));
     }
-    let empty_days: HashMap<i64, (i64, i64)> = HashMap::new();
-
     // The response-time sparkline grid for EVERY component in ONE aggregate query, keyed
     // (name, hour-bucket) -> (sum_latency, count).
     let mut latency: HashMap<String, HashMap<i64, (i64, i64)>> = HashMap::new();
@@ -335,21 +545,58 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
             .or_default()
             .insert(row.bucket, (row.sum_latency_ms, row.count));
     }
-    let empty_latency: HashMap<i64, (i64, i64)> = HashMap::new();
-
     // Per-group rollup input: each group's visible members' status tokens.
     let mut group_members: HashMap<String, Vec<&'static str>> = HashMap::new();
 
-    for check in store.list_checks().await.into_iter().filter(|c| c.enabled) {
-        let latest = store.latest_result(&check.name).await;
-        let latest_ok = latest.as_ref().map(|r| r.ok);
+    for projection in projections {
+        let mut latest_ok = None;
+        let mut latest_latency = None;
+        let mut last_checked = None;
+        let (mut t24, mut u24, mut t7, mut u7, mut t90, mut u90) = (0, 0, 0, 0, 0, 0);
+        let mut comp_days: HashMap<i64, (i64, i64)> = HashMap::new();
+        let mut comp_latency: HashMap<i64, (i64, i64)> = HashMap::new();
 
-        let (t24, u24) = store.uptime_counts(&check.name, now - WINDOW_24H).await;
-        let (t7, u7) = store.uptime_counts(&check.name, now - WINDOW_7D).await;
-        let (t90, u90) = store.uptime_counts(&check.name, now - WINDOW_90D).await;
+        for raw_name in &projection.raw_names {
+            if let Some(latest) = store.latest_result(raw_name).await {
+                latest_ok = match (latest_ok, latest.ok) {
+                    (Some(false), _) | (_, false) => Some(false),
+                    _ => Some(true),
+                };
+                latest_latency = Some(
+                    latest_latency
+                        .map_or(latest.latency_ms, |value: i64| value.max(latest.latency_ms)),
+                );
+                last_checked =
+                    Some(last_checked.map_or(latest.ts, |value: i64| value.max(latest.ts)));
+            }
+            let (total, up) = store.uptime_counts(raw_name, now - WINDOW_24H).await;
+            t24 += total;
+            u24 += up;
+            let (total, up) = store.uptime_counts(raw_name, now - WINDOW_7D).await;
+            t7 += total;
+            u7 += up;
+            let (total, up) = store.uptime_counts(raw_name, now - WINDOW_90D).await;
+            t90 += total;
+            u90 += up;
+
+            if let Some(raw_days) = daily.get(raw_name) {
+                for (&day, &(total, up)) in raw_days {
+                    let bucket = comp_days.entry(day).or_insert((0, 0));
+                    bucket.0 += total;
+                    bucket.1 += up;
+                }
+            }
+            if let Some(raw_latency) = latency.get(raw_name) {
+                for (&bucket_id, &(sum, count)) in raw_latency {
+                    let bucket = comp_latency.entry(bucket_id).or_insert((0, 0));
+                    bucket.0 += sum;
+                    bucket.1 += count;
+                }
+            }
+        }
 
         let uptime_24h = uptime_pct(t24, u24);
-        let status = if under_maintenance.contains(&check.name) {
+        let status = if under_maintenance.contains(&projection.name) {
             Status::Maintenance
         } else {
             component_status(latest_ok, uptime_24h)
@@ -357,7 +604,7 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
         if status.severity() > overall.severity() {
             overall = status;
         }
-        if let Some(gid) = &check.group_id {
+        if let Some(gid) = &projection.group_id {
             group_members
                 .entry(gid.clone())
                 .or_default()
@@ -365,52 +612,38 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
         }
 
         // Window-mean latency: total sum / total count across this component's hour buckets.
-        let comp_latency = latency.get(&check.name).unwrap_or(&empty_latency);
         let (lat_sum, lat_count) = comp_latency
             .values()
             .fold((0i64, 0i64), |(s, c), &(bs, bc)| (s + bs, c + bc));
 
         components.push(ComponentView {
-            name: check.name.clone(),
-            kind: check.kind.clone(),
+            name: projection.name,
+            kind: projection.kind,
             status: status.as_str(),
             uptime_24h,
             uptime_7d: uptime_pct(t7, u7),
             uptime_90d: uptime_pct(t90, u90),
-            latency_ms: latest.as_ref().map(|r| r.latency_ms),
+            latency_ms: latest_latency,
             latency_avg_ms: latency_avg(lat_sum, lat_count),
-            last_checked: latest.as_ref().map(|r| r.ts),
-            days: build_days(daily.get(&check.name).unwrap_or(&empty_days), today),
+            last_checked,
+            days: build_days_for(&comp_days, today, history_days),
             latency_points: build_latency_points(
-                comp_latency,
+                &comp_latency,
                 now,
                 SPARK_BUCKET_SECS,
                 SPARK_BUCKETS,
             ),
-            group_id: check.group_id.clone(),
+            group_id: projection.group_id,
         });
     }
 
-    // Group sections with their worst-of rollup pill (ordered by position then name).
-    let groups: Vec<GroupView> = store
-        .list_component_groups()
-        .await
-        .into_iter()
-        .map(|g: ComponentGroup| {
-            let status = match group_members.get(&g.id) {
-                Some(members) => group_rollup(members),
-                None => group_rollup(&[]),
-            };
-            GroupView {
-                id: g.id,
-                name: g.name,
-                position: g.position,
-                status,
-            }
-        })
-        .collect();
+    // Group sections with their worst-of rollup pill.
+    for group in &mut groups {
+        group.status = group_members
+            .get(&group.id)
+            .map_or_else(|| group_rollup(&[]), |members| group_rollup(members));
+    }
 
-    let incidents = store.list_incidents().await;
     // Active (non-resolved) incidents floor the banner: critical -> down, else degraded.
     for inc in incidents.iter().filter(|i| i.status != "resolved") {
         let floor = incident_floor(&inc.severity);
@@ -428,11 +661,12 @@ pub async fn build_status(store: &dyn Store, now: i64) -> StatusView {
     StatusView {
         overall: overall.as_str(),
         updated_at: now,
+        history_days,
         infra: None,
         components,
         groups,
         incidents,
-        updates: store.list_incident_updates().await,
+        updates,
         // Only upcoming/ongoing windows are public surface (ended ones drop off).
         maintenances: maintenances
             .into_iter()
@@ -598,5 +832,53 @@ mod tests {
         assert!(maintenance_ongoing(&m, 100), "inclusive start");
         assert!(maintenance_ongoing(&m, 199));
         assert!(!maintenance_ongoing(&m, 200), "exclusive end");
+    }
+
+    #[test]
+    fn public_maintenance_projection_hides_internal_only_windows() {
+        let checks = vec![
+            Check {
+                name: "Gateway".to_string(),
+                kind: "http".to_string(),
+                target: "http://gateway".to_string(),
+                enabled: true,
+                group_id: None,
+            },
+            Check {
+                name: "CA".to_string(),
+                kind: "http".to_string(),
+                target: "http://keyward".to_string(),
+                enabled: true,
+                group_id: None,
+            },
+        ];
+        let catalog = vec![PublicComponent {
+            name: "Public edge".to_string(),
+            group: "Core".to_string(),
+            checks: vec!["Gateway".to_string()],
+        }];
+        let (projections, _) = public_projections(&checks, &catalog);
+        let maintenances = vec![
+            Maintenance {
+                id: "internal".to_string(),
+                title: "CA rotation".to_string(),
+                body: "internal".to_string(),
+                starts_at: 100,
+                ends_at: 200,
+                affected: "CA".to_string(),
+            },
+            Maintenance {
+                id: "public".to_string(),
+                title: "Edge work".to_string(),
+                body: "public".to_string(),
+                starts_at: 100,
+                ends_at: 200,
+                affected: "CA, Gateway".to_string(),
+            },
+        ];
+        let projected = project_public_maintenances_from(&projections, maintenances);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, "public");
+        assert_eq!(projected[0].affected, "Public edge");
     }
 }

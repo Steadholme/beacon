@@ -458,7 +458,7 @@ fn compute_trend(rings: &HashMap<String, HostRings>, now: i64) -> Vec<&'static s
             push_bucket_bands(&ring.mem, bucket, &mut bands);
             push_bucket_bands(&ring.disk, bucket, &mut bands);
         }
-        out.push(worst_band(bands.into_iter()));
+        out.push(worst_band(bands));
     }
     out
 }

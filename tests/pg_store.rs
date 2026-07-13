@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
+use beacon::config::PublicComponent;
 use beacon::store::{Check, PgStore, Store};
 use beacon::{app, build_dev_state, now_secs, AppState};
 use serde_json::Value;
@@ -32,7 +33,9 @@ async fn pg_store_full_integration() {
     };
 
     // --- connect / migrate (idempotent: run twice) -------------------------
-    let pg = PgStore::connect(&url).await.expect("connect TEST_DATABASE_URL");
+    let pg = PgStore::connect(&url)
+        .await
+        .expect("connect TEST_DATABASE_URL");
     pg.migrate().await.expect("migrate");
     pg.migrate().await.expect("migrate is idempotent");
     let pg = Arc::new(pg);
@@ -72,7 +75,10 @@ async fn pg_store_full_integration() {
         .iter()
         .find(|d| d.name == "PgGateway" && d.day == (now - 30) / 86_400)
         .expect("today's bucket present");
-    assert!(today.total >= 3 && today.up >= 2, "bucket aggregates results");
+    assert!(
+        today.total >= 3 && today.up >= 2,
+        "bucket aggregates results"
+    );
 
     // Incident persistence + ordering (newest first) with severity/affected/resolved_at.
     pg.insert_incident(&beacon::store::Incident {
@@ -116,11 +122,15 @@ async fn pg_store_full_integration() {
         created_at: now + 1,
     })
     .await;
-    pg.set_incident_status("inc_b", "monitoring", now + 1, 0).await;
+    pg.set_incident_status("inc_b", "monitoring", now + 1, 0)
+        .await;
     let updates = pg.list_incident_updates().await;
-    assert!(updates.iter().any(|u| u.id == "upd_1" && u.incident_id == "inc_b"));
+    assert!(updates
+        .iter()
+        .any(|u| u.id == "upd_1" && u.incident_id == "inc_b"));
     assert_eq!(pg.get_incident("inc_b").await.unwrap().status, "monitoring");
-    pg.set_incident_status("inc_b", "resolved", now + 2, now + 2).await;
+    pg.set_incident_status("inc_b", "resolved", now + 2, now + 2)
+        .await;
     assert_eq!(pg.get_incident("inc_b").await.unwrap().resolved_at, now + 2);
 
     // Maintenance windows round-trip, ordered by starts_at.
@@ -134,11 +144,20 @@ async fn pg_store_full_integration() {
     })
     .await;
     let maintenances = pg.list_maintenances().await;
-    assert!(maintenances.iter().any(|m| m.id == "mw_1" && m.affected == "PgGateway"));
+    assert!(maintenances
+        .iter()
+        .any(|m| m.id == "mw_1" && m.affected == "PgGateway"));
 
     // --- full HTTP flow through the PG-backed app --------------------------
     let mut state: AppState = build_dev_state().await;
     state.store = pg.clone();
+    let mut config = (*state.config).clone();
+    config.public_catalog = vec![PublicComponent {
+        name: "PgGateway".to_string(),
+        group: "Integration".to_string(),
+        checks: vec!["PgGateway".to_string()],
+    }];
+    state.config = Arc::new(config);
 
     // Public status renders against Postgres-backed data.
     let (status, body) = raw_call(&state, get("/status")).await;
@@ -157,7 +176,7 @@ async fn pg_store_full_integration() {
             .header("x-auth-subject", "u_admin")
             .header("x-auth-email", "admin@holdfast.local")
             .body(Body::from(
-                "title=PG+incident&status=monitoring&severity=major&body=via+pg\
+                "title=PG+incident&status=monitoring&severity=major&affected=PgGateway&body=via+pg\
                  &csrf_token=tok_csrf_for_tests",
             ))
             .unwrap(),
