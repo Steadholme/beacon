@@ -94,7 +94,7 @@ async fn public_status_renders_without_auth() {
     assert!(html.contains("All systems operational"));
     assert!(
         !html.contains(r#"<span class="status-hero__uptime""#),
-        "no nominal 90d average before first check"
+        "no nominal evidence-window average before first check"
     );
     assert!(!html.contains("Active incidents"));
     assert!(html.contains("Past incidents"));
@@ -325,6 +325,53 @@ async fn raw_status_exists_only_on_the_dedicated_internal_router() {
         .unwrap()
         .iter()
         .any(|component| component["name"] == "CA"));
+}
+
+#[tokio::test]
+async fn compatibility_uptime_field_follows_each_read_models_evidence_window() {
+    let state = build_dev_state().await;
+    let now = now_secs();
+    // A 45-day-old failure belongs to the operator's 90-day evidence, but must not affect the
+    // public projection's declared 30-day evidence window.
+    state
+        .store
+        .insert_result("Gateway", false, 80, now - 45 * 86_400)
+        .await;
+    state.store.insert_result("Gateway", true, 12, now).await;
+
+    let (_, body) = call(&state, get("/api/status")).await;
+    let public: Value = serde_json::from_slice(&body).unwrap();
+    let public_gateway = public["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["name"] == "Gateway")
+        .unwrap();
+    assert_eq!(public["history_days"], 30);
+    assert_eq!(
+        public_gateway["uptime_90d"], 100.0,
+        "legacy field follows the public 30-day evidence window"
+    );
+
+    let response = internal_app(state)
+        .oneshot(get("/api/status"))
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let internal: Value = serde_json::from_slice(&body).unwrap();
+    let internal_gateway = internal["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["name"] == "Gateway")
+        .unwrap();
+    assert_eq!(internal["history_days"], 90);
+    assert_eq!(
+        internal_gateway["uptime_90d"], 50.0,
+        "operator model retains its 90-day evidence window"
+    );
 }
 
 #[tokio::test]

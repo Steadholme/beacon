@@ -93,7 +93,7 @@ pub struct Maintenance {
     pub affected: String,
 }
 
-/// One `(component, day)` aggregate over `check_results` — the 90-day uptime-bar input.
+/// One `(component, day)` aggregate over `check_results` — the caller-selected evidence input.
 /// `day` is the epoch-day bucket (`ts / 86400`, integer division).
 #[derive(Clone, Debug)]
 pub struct DailyUptime {
@@ -182,7 +182,7 @@ pub trait Store: Send + Sync {
     async fn list_maintenances(&self) -> Vec<Maintenance>;
 
     /// `(name, day, total, up)` aggregates over `check_results` at/after `since_ts`, for
-    /// EVERY component in ONE query (`GROUP BY name, ts / 86400`) — the 90-day bar input.
+    /// EVERY component in ONE query (`GROUP BY name, ts / 86400`) — the evidence-bar input.
     async fn daily_uptime(&self, since_ts: i64) -> Vec<DailyUptime>;
 
     /// `(name, bucket, sum_latency_ms, count)` latency aggregates over `check_results` at/after
@@ -890,7 +890,7 @@ impl PgStore {
     }
 
     async fn daily_uptime_async(&self, since_ts: i64) -> Result<Vec<DailyUptime>, sqlx::Error> {
-        // ONE aggregate for the whole 90-day bar grid: integer division on the epoch
+        // ONE aggregate for the caller-selected evidence grid: integer division on the epoch
         // buckets each result into its day, portable across Postgres/FusionDB (no
         // date_trunc, no extensions). SUM(CASE ...) mirrors uptime_counts.
         let rows = sqlx::query(

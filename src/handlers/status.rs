@@ -3,7 +3,7 @@
 //! Both are unauthenticated by design (placed behind a Sluice `auth=public` route). The
 //! page mirrors the HOLDFAST enterprise brand: app-bar, overall hero, an active-incidents
 //! section (severity-tinted cards with an expandable update timeline), maintenance notices,
-//! compact component rows with rolling uptime + the classic 90-day uptime bar row,
+//! compact component rows with rolling uptime + a read-model-declared evidence window,
 //! and a "Past incidents" section (last 14 days, grouped by day).
 
 use axum::extract::State;
@@ -405,8 +405,13 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     };
     let uptime = checked_uptime_avg(view.components.iter())
         .map(|avg| {
+            let days = view.history_days.to_string();
+            let title = i18n::tf(loc, "status.uptime.average_all", &[("days", &days)]);
+            let window = i18n::tf(loc, "status.uptime.window", &[("days", &days)]);
             format!(
-                r#"<span class="status-hero__uptime" title="Average 90-day uptime across all components"><strong>{avg:.2}%</strong> uptime · 90 days</span>"#
+                r#"<span class="status-hero__uptime" title="{title}"><strong>{avg:.2}%</strong> {window}</span>"#,
+                title = esc(&title),
+                window = esc(&window),
             )
         })
         .unwrap_or_default();
@@ -527,8 +532,14 @@ fn render_group_section(
     let open = if rollup != "operational" { " open" } else { "" };
     let uptime = checked_uptime_avg(members.iter().copied())
         .map(|avg| {
+            let days = members
+                .first()
+                .map_or(0, |component| component.days.len())
+                .to_string();
+            let title = i18n::tf(loc, "status.uptime.average_group", &[("days", &days)]);
             format!(
-                r#"<span class="cgroup__uptime" title="Average 90-day uptime across this group">{avg:.2}%</span>"#
+                r#"<span class="cgroup__uptime" title="{}">{avg:.2}%</span>"#,
+                esc(&title),
             )
         })
         .unwrap_or_default();
@@ -568,7 +579,7 @@ fn state_mod(status: &str) -> &'static str {
     }
 }
 
-/// Render a compact component row with latest latency, 90-day uptime, and the 90 daily bars.
+/// Render a compact component row with latest latency and the declared evidence window.
 fn render_component_row(
     c: &ComponentView,
     now: i64,
@@ -625,9 +636,13 @@ fn render_component_row(
     };
     let spark = render_latency_spark(&c.latency_points);
     let pct_title = if c.last_checked.is_some() {
-        "90-day uptime"
+        i18n::tf(
+            loc,
+            "status.uptime.component_title",
+            &[("days", &c.days.len().to_string())],
+        )
     } else {
-        "awaiting first check"
+        "awaiting first check".to_string()
     };
     let pct = if c.last_checked.is_some() {
         format!("{:.2}%", c.uptime_90d)
@@ -652,7 +667,7 @@ fn render_component_row(
         latency = esc(&latency),
         spark = spark,
         bars = bars,
-        pct_title = pct_title,
+        pct_title = esc(&pct_title),
         pct = esc(&pct),
         label = esc(&status_label_l(loc, c.status)),
     )
@@ -715,16 +730,30 @@ fn render_barlegend(
     team_first_day: Option<i64>,
 ) -> String {
     let mid = checked_uptime_avg(view.components.iter())
-        .map(|avg| format!("{avg:.2}% uptime · All times UTC"))
-        .unwrap_or_else(|| "No uptime data yet · All times UTC".to_string());
+        .map(|avg| {
+            i18n::tf(
+                loc,
+                "status.uptime.legend_summary",
+                &[("uptime", &format!("{avg:.2}"))],
+            )
+        })
+        .unwrap_or_else(|| i18n::t(loc, "status.uptime.legend_empty").to_string());
     let since = team_first_day
-        .map(|day| format!(" · Monitoring since {}", fmt_date_l(loc, day * DAY_SECS)))
+        .map(|day| {
+            i18n::tf(
+                loc,
+                "status.uptime.monitoring_since",
+                &[("date", &fmt_date_l(loc, day * DAY_SECS))],
+            )
+        })
         .unwrap_or_default();
+    let days = view.history_days.to_string();
     format!(
-        r#"<div class="bc-barlegend"><span>{days} days ago</span><span class="bc-barlegend__mid">{mid}{since}</span><span>Today</span></div>"#,
-        days = view.history_days,
+        r#"<div class="bc-barlegend"><span>{days_ago}</span><span class="bc-barlegend__mid">{mid}{since}</span><span>{today}</span></div>"#,
+        days_ago = esc(&i18n::tf(loc, "status.uptime.days_ago", &[("days", &days)])),
         mid = esc(&mid),
         since = esc(&since),
+        today = esc(i18n::t(loc, "status.uptime.today")),
     )
 }
 

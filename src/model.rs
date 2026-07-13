@@ -1,8 +1,8 @@
 //! Status model: roll up stored probe results into per-component + overall status.
 //!
 //! This is the pure read-side: given the [`Store`](crate::store::Store) and "now", it
-//! computes each component's current status + rolling uptime windows (24h / 7d / 90d), the
-//! per-day 90-day uptime bars, and the worst-of overall status that drives the public
+//! computes each component's current status + rolling uptime windows (24h / 7d / the read
+//! model's declared evidence window), the per-day evidence bars, and the worst-of overall
 //! banner (active incidents and ongoing maintenance fold in with statuspage precedence:
 //! critical incident > maintenance > all-ok). Kept free of HTTP/HTML so the uptime and
 //! bucketing math is unit-testable in isolation.
@@ -30,8 +30,8 @@ pub const WINDOW_SPARK: i64 = SPARK_BUCKET_SECS * SPARK_BUCKETS;
 pub const DAY_SECS: i64 = 86_400;
 /// How many daily bars the status page renders per component.
 pub const BAR_DAYS: i64 = 90;
-/// Compact history carried by the public read model. The 90-day rolling percentage remains
-/// available, while the default HTML/JSON payload only ships the recent daily evidence.
+/// Compact history carried by the public read model. The legacy `uptime_90d` JSON field remains
+/// for client compatibility, but its value follows this same 30-day evidence window.
 pub const PUBLIC_BAR_DAYS: i64 = 30;
 /// "Past incidents" horizon on the public page, in seconds (14 days).
 pub const WINDOW_14D: i64 = 1_209_600;
@@ -106,7 +106,7 @@ pub fn incident_floor(severity: &str) -> Status {
     }
 }
 
-/// One day of a component's 90-day uptime bar.
+/// One day of a component's declared evidence window.
 #[derive(Clone, Debug, Serialize)]
 pub struct DayStat {
     /// Calendar date of the bucket, `YYYY-MM-DD` (UTC).
@@ -125,6 +125,9 @@ pub struct ComponentView {
     pub status: &'static str,
     pub uptime_24h: f64,
     pub uptime_7d: f64,
+    /// Uptime over [`StatusView::history_days`]. The field name is retained for wire
+    /// compatibility with existing Portal clients; consumers must use `history_days` as the
+    /// semantic window rather than assuming 90 days.
     pub uptime_90d: f64,
     /// Latest measured latency in ms, if the component has ever been probed.
     pub latency_ms: Option<i64>,
@@ -526,6 +529,7 @@ async fn build_projected_status(
     // Daily aggregate for every raw probe in one query; only projected buckets are serialized.
     let today = day_bucket(now);
     let bar_since = (today - history_days.max(1) + 1) * DAY_SECS;
+    let evidence_window_secs = history_days.max(1).saturating_mul(DAY_SECS);
     let mut daily: HashMap<String, HashMap<i64, (i64, i64)>> = HashMap::new();
     for row in store.daily_uptime(bar_since).await {
         daily
@@ -552,7 +556,8 @@ async fn build_projected_status(
         let mut latest_ok = None;
         let mut latest_latency = None;
         let mut last_checked = None;
-        let (mut t24, mut u24, mut t7, mut u7, mut t90, mut u90) = (0, 0, 0, 0, 0, 0);
+        let (mut t24, mut u24, mut t7, mut u7, mut evidence_total, mut evidence_up) =
+            (0, 0, 0, 0, 0, 0);
         let mut comp_days: HashMap<i64, (i64, i64)> = HashMap::new();
         let mut comp_latency: HashMap<i64, (i64, i64)> = HashMap::new();
 
@@ -575,9 +580,11 @@ async fn build_projected_status(
             let (total, up) = store.uptime_counts(raw_name, now - WINDOW_7D).await;
             t7 += total;
             u7 += up;
-            let (total, up) = store.uptime_counts(raw_name, now - WINDOW_90D).await;
-            t90 += total;
-            u90 += up;
+            let (total, up) = store
+                .uptime_counts(raw_name, now - evidence_window_secs)
+                .await;
+            evidence_total += total;
+            evidence_up += up;
 
             if let Some(raw_days) = daily.get(raw_name) {
                 for (&day, &(total, up)) in raw_days {
@@ -622,7 +629,7 @@ async fn build_projected_status(
             status: status.as_str(),
             uptime_24h,
             uptime_7d: uptime_pct(t7, u7),
-            uptime_90d: uptime_pct(t90, u90),
+            uptime_90d: uptime_pct(evidence_total, evidence_up),
             latency_ms: latest_latency,
             latency_avg_ms: latency_avg(lat_sum, lat_count),
             last_checked,
