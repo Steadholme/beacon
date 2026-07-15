@@ -112,10 +112,10 @@ TEST_DATABASE_URL=postgres://postgres:pw@127.0.0.1:55441/beacon \
 多阶段、非 root（uid 10001）、`ring` 后端（无 OpenSSL）、内置 `beacon healthcheck` 子命令、`EXPOSE 8400`。
 
 ```bash
-docker build -t holdfast/beacon:dev .
+docker build -t steadholme/beacon:dev .
 docker run -d --name beacon -p 127.0.0.1:8400:8400 \
   -e BEACON_STORE=postgres -e DATABASE_URL=$DATABASE_URL \
-  holdfast/beacon:dev
+  steadholme/beacon:dev
 curl -fsS http://127.0.0.1:8400/healthz      # ok
 curl -fsS http://127.0.0.1:8400/status       # 公开状态页
 ```
