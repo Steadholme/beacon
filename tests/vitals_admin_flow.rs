@@ -22,7 +22,7 @@ fn admin_get() -> Request<Body> {
     Request::builder()
         .uri("/admin")
         .header("x-auth-subject", "u_admin")
-        .header("x-auth-email", "ops@holdfast.local")
+        .header("x-auth-email", "ops@steadholme.local")
         .body(Body::empty())
         .unwrap()
 }

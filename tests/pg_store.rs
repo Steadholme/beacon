@@ -174,7 +174,7 @@ async fn pg_store_full_integration() {
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .header(header::COOKIE, "__Host-csrf=tok_csrf_for_tests")
             .header("x-auth-subject", "u_admin")
-            .header("x-auth-email", "admin@holdfast.local")
+            .header("x-auth-email", "admin@steadholme.local")
             .body(Body::from(
                 "title=PG+incident&status=monitoring&severity=major&affected=PgGateway&body=via+pg\
                  &csrf_token=tok_csrf_for_tests",

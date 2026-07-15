@@ -12,7 +12,7 @@ use tower::ServiceExt;
 const CSRF: &str = "tok_csrf_for_tests";
 const OPERATOR: &[(&str, &str)] = &[
     ("x-auth-subject", "u_admin"),
-    ("x-auth-email", "admin@holdfast.local"),
+    ("x-auth-email", "admin@steadholme.local"),
 ];
 
 async fn call(state: &AppState, req: Request<Body>) -> (StatusCode, Vec<u8>) {

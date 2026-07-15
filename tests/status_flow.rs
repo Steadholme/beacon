@@ -59,7 +59,7 @@ fn post_admin(uri: &str, headers: &[(&str, &str)], form: &str) -> Request<Body> 
 
 const OPERATOR: &[(&str, &str)] = &[
     ("x-auth-subject", "u_admin"),
-    ("x-auth-email", "admin@holdfast.local"),
+    ("x-auth-email", "admin@steadholme.local"),
 ];
 
 #[tokio::test]
@@ -803,7 +803,7 @@ async fn admin_page_renders_with_email() {
     let req = Request::builder()
         .uri("/admin")
         .header("x-auth-subject", "u_admin")
-        .header("x-auth-email", "ops@holdfast.local")
+        .header("x-auth-email", "ops@steadholme.local")
         .body(Body::empty())
         .unwrap();
     let resp = app(state.clone()).oneshot(req).await.unwrap();
@@ -824,7 +824,7 @@ async fn admin_page_renders_with_email() {
         .unwrap();
     let html = text(&bytes);
     assert!(html.contains("Beacon admin"));
-    assert!(html.contains("ops@holdfast.local"), "signed-in email shown");
+    assert!(html.contains("ops@steadholme.local"), "signed-in email shown");
     assert!(html.contains("/_gw/auth/logout"), "logout link present");
     assert!(html.contains("Post an incident"));
     assert!(html.contains("Schedule maintenance"));
