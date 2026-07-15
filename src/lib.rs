@@ -1,4 +1,4 @@
-//! Beacon — uptime monitoring + PUBLIC status page + SSO admin for the HOLDFAST stack.
+//! Beacon — uptime monitoring + PUBLIC status page + SSO admin for the Steadholme stack.
 //!
 //! Library root: defines [`AppState`], wires the routes via [`app`], and provides
 //! [`build_dev_state`] / [`state_with`] (in-memory store, seeded checks) and

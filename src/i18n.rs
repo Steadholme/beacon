@@ -31,7 +31,7 @@ pub static EN: &[(&str, &str)] = &[
         "Webhook registration is currently unavailable. Existing public reads are unaffected.",
     ),
     ("status.components", "Components"),
-    ("status.footer", "HOLDFAST · Sovereign infrastructure"),
+    ("status.footer", "Steadholme · Sovereign infrastructure"),
     ("status.get_updates", "Get updates"),
     (
         "status.hero.down.sub",
@@ -94,7 +94,7 @@ pub static EN: &[(&str, &str)] = &[
     ("status.state.operational", "Operational"),
     (
         "status.sub",
-        "Live availability of the HOLDFAST sovereign infrastructure.",
+        "Live availability of the Steadholme sovereign infrastructure.",
     ),
     (
         "status.subscribe.body",
@@ -167,7 +167,7 @@ pub static ZH: &[(&str, &str)] = &[
         "Webhook 注册目前不可用；公开读取渠道不受影响。",
     ),
     ("status.components", "组件"),
-    ("status.footer", "HOLDFAST · 主权基础设施"),
+    ("status.footer", "Steadholme · 主权基础设施"),
     ("status.get_updates", "获取更新"),
     (
         "status.hero.down.sub",
@@ -210,7 +210,7 @@ pub static ZH: &[(&str, &str)] = &[
     ("status.state.down", "中断"),
     ("status.state.maintenance", "维护"),
     ("status.state.operational", "正常"),
-    ("status.sub", "HOLDFAST 主权基础设施的实时可用性。"),
+    ("status.sub", "Steadholme 主权基础设施的实时可用性。"),
     (
         "status.subscribe.body",
         "当事故创建或更新时，接收带签名的 JSON webhook POST。",
@@ -285,7 +285,7 @@ pub static JA: &[(&str, &str)] = &[
         "Webhook 登録は現在利用できません。公開読み取り機能には影響しません。",
     ),
     ("status.components", "コンポーネント"),
-    ("status.footer", "HOLDFAST · 主権インフラ"),
+    ("status.footer", "Steadholme · 主権インフラ"),
     ("status.get_updates", "更新を受け取る"),
     (
         "status.hero.down.sub",
@@ -343,7 +343,7 @@ pub static JA: &[(&str, &str)] = &[
     ("status.state.down", "停止"),
     ("status.state.maintenance", "メンテナンス"),
     ("status.state.operational", "正常"),
-    ("status.sub", "HOLDFAST 主権インフラのライブ可用性。"),
+    ("status.sub", "Steadholme 主権インフラのライブ可用性。"),
     (
         "status.subscribe.body",
         "インシデントの作成または更新時に、署名付き JSON webhook POST を受け取ります。",

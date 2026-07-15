@@ -1,7 +1,7 @@
 //! PUBLIC status surface: the server-rendered status page and the machine-readable JSON.
 //!
 //! Both are unauthenticated by design (placed behind a Sluice `auth=public` route). The
-//! page mirrors the HOLDFAST enterprise brand: app-bar, overall hero, an active-incidents
+//! page mirrors the Steadholme enterprise brand: app-bar, overall hero, an active-incidents
 //! section (severity-tinted cards with an expandable update timeline), maintenance notices,
 //! compact component rows with rolling uptime + a read-model-declared evidence window,
 //! and a "Past incidents" section (last 14 days, grouped by day).

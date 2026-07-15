@@ -94,10 +94,10 @@ pub async fn feed_xml(State(state): State<AppState>) -> Response {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\">\n\
          <channel>\n\
-         \x20 <title>HOLDFAST Status</title>\n\
+         \x20 <title>Steadholme Status</title>\n\
          \x20 <link>{base}/status</link>\n\
          \x20 <atom:link href=\"{base}/feed.xml\" rel=\"self\" type=\"application/rss+xml\"/>\n\
-         \x20 <description>Incident history for the HOLDFAST sovereign infrastructure.</description>\n\
+         \x20 <description>Incident history for the Steadholme sovereign infrastructure.</description>\n\
          \x20 <lastBuildDate>{last_build}</lastBuildDate>\n\
          {items}</channel>\n\
          </rss>\n",

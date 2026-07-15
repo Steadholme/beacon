@@ -43,7 +43,7 @@ pub fn dynamic_js() -> &'static str {
         .as_str()
 }
 
-/// Canonical HOLDFAST mark; its color follows Odyssey's semantic Beacon accent.
+/// Canonical Steadholme mark; its color follows Odyssey's semantic Beacon accent.
 pub const SHIELD_SVG: &str = odyssey::HOLDFAST_MARK_SVG;
 
 /// Cross-subdomain SSO logout (terminated at the gateway). The same path Beacon has always used.
@@ -261,7 +261,7 @@ pub fn hv<'a>(h: &'a HeaderMap, n: &str) -> Option<&'a str> {
     h.get(n).and_then(|v| v.to_str().ok())
 }
 
-/// Wrap `inner` HTML in the standard HOLDFAST chrome (app-bar + centered console + footer)
+/// Wrap `inner` HTML in the standard Steadholme chrome (app-bar + centered console + footer)
 /// via the Odyssey shell layer, so `<html lang>` and the chrome strings follow the resolved
 /// `locale` (i18n pilot). Used by the standalone public subscription notices; `title` is the
 /// page `<title>` (already trusted/static text).
@@ -271,14 +271,14 @@ pub fn page_shell(
     title: &str,
     inner: &str,
 ) -> String {
-    let full_title = format!("{title} · HOLDFAST");
+    let full_title = format!("{title} · Steadholme");
     odyssey::page_shell(
         odyssey::PageChrome {
             title: &full_title,
             brand: odyssey::Brand {
                 tile_svg: SHIELD_SVG,
                 accent: "",
-                name: "HOLDFAST",
+                name: "Steadholme",
                 sub: "Status",
             },
             nav: &[],
@@ -286,7 +286,7 @@ pub fn page_shell(
                 email: None,
                 logout_url: LOGOUT_URL,
             },
-            footer: odyssey::raw("<span>HOLDFAST · Sovereign infrastructure</span>"),
+            footer: odyssey::raw("<span>Steadholme · Sovereign infrastructure</span>"),
         },
         odyssey::raw(inner),
         odyssey::ShellOpts {

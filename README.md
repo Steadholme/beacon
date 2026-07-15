@@ -1,6 +1,6 @@
 # Beacon — 运行时监控 + 公开状态页 + SSO 管理端
 
-Beacon 是 HOLDFAST 主权基础设施栈中的 **uptime 监控** 服务：周期性探测各组件（HTTP 2xx / TCP 连接），把结果写入 Postgres，计算滚动可用率（24h / 7d / 当前 read model 的 evidence window），并提供一个 **incident-first 公开状态页**（`/status`）与一个 **网关 SSO 保护的管理端**（`/admin`）。公开组件由显式 catalog 投影，不再等同于内部 raw checks；新增内部 listener 给 Portal 等服务端消费者读取完整模型。
+Beacon 是 Steadholme 主权基础设施栈中的 **uptime 监控** 服务：周期性探测各组件（HTTP 2xx / TCP 连接），把结果写入 Postgres，计算滚动可用率（24h / 7d / 当前 read model 的 evidence window），并提供一个 **incident-first 公开状态页**（`/status`）与一个 **网关 SSO 保护的管理端**（`/admin`）。公开组件由显式 catalog 投影，不再等同于内部 raw checks；新增内部 listener 给 Portal 等服务端消费者读取完整模型。
 
 技术栈与 keystone/keyward 一致：**Rust + axum**，rustls（`ring` 后端，无 OpenSSL），sqlx 运行期查询（无编译期宏、无数据库即可构建）。数据层只用 **可移植标准 SQL**（`TEXT/BIGINT/BOOLEAN` + `PK/NOT NULL/DEFAULT` + `INSERT .. ON CONFLICT` + `SUM(CASE WHEN ...)` 聚合），日后可在 FusionDB 上经 pgwire 原样运行。
 

@@ -83,7 +83,7 @@ async fn public_status_renders_without_auth() {
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK, "public status page is open");
     let html = text(&body);
-    assert!(html.contains("HOLDFAST"), "brand present");
+    assert!(html.contains("Steadholme"), "brand present");
     assert!(html.contains("System status"), "page heading present");
     // The fail-safe public catalog shows only explicitly listed components. CA remains an
     // internal raw probe even though it is present in the default seed.

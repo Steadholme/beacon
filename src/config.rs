@@ -47,7 +47,7 @@ pub struct Config {
     /// Internal vitals service base URL (`VITALS_URL`), disabled when unset.
     pub vitals_url: Option<String>,
     /// Checks seeded into an EMPTY checks table on first boot (`BEACON_SEED` JSON, else the
-    /// built-in HOLDFAST default seed).
+    /// built-in Steadholme default seed).
     pub seed: Vec<Check>,
     /// Explicit public read-model projection (`BEACON_PUBLIC_CATALOG` JSON).
     ///
@@ -127,7 +127,7 @@ impl Default for Config {
     }
 }
 
-/// The built-in HOLDFAST component seed: the gateway (public TLS surface), the identity
+/// The built-in Steadholme component seed: the gateway (public TLS surface), the identity
 /// provider, and the internal CA. Targets resolve on the `holdfast` Docker network; an
 /// operator overrides the whole list via `BEACON_SEED`.
 pub fn default_seed() -> Vec<Check> {
