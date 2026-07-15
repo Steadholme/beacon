@@ -129,7 +129,7 @@ pub fn page_shell(chrome: PageChrome<'_>, body: Html, opts: ShellOpts) -> String
 ///
 /// This is a separate additive entry point so existing [`page_shell`] markup and default
 /// presentation remain compatible. Profiled pages stamp `data-ody-profile` on `<html>` and
-/// `data-ody-shell` on `<body>`, activating the shared HOLDFAST shell, mineral grid, navigation,
+/// `data-ody-shell` on `<body>`, activating the shared Steadholme shell, mineral grid, navigation,
 /// and status language.
 pub fn page_shell_with_profile(
     chrome: PageChrome<'_>,

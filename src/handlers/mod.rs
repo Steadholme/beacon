@@ -44,7 +44,7 @@ pub fn dynamic_js() -> &'static str {
 }
 
 /// Canonical Steadholme mark; its color follows Odyssey's semantic Beacon accent.
-pub const SHIELD_SVG: &str = odyssey::HOLDFAST_MARK_SVG;
+pub const SHIELD_SVG: &str = odyssey::STEADHOLME_MARK_SVG;
 
 /// Cross-subdomain SSO logout (terminated at the gateway). The same path Beacon has always used.
 pub const LOGOUT_URL: &str = "/_gw/auth/logout";

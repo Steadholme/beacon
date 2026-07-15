@@ -36,7 +36,7 @@ pub use data::{card, card_list, empty_state, pager, progress, stat_tile, table, 
 pub use feedback::{alert, filter_chip, modal, pill, skeleton, switch, toast, Tone};
 pub use html::{esc, raw, Html};
 pub use i18n::{fmt_date, fmt_int, month_abbr, resolve_locale, t, tf, tn, Locale};
-pub use icons::{holdfast_mark, HOLDFAST_MARK_SVG};
+pub use icons::{steadholme_mark, STEADHOLME_MARK_SVG};
 pub use identity::{initial, letter_tile, tone};
 pub use profile::Profile;
 pub use shell::{

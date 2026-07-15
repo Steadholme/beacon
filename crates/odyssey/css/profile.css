@@ -1,6 +1,6 @@
 /* GENERATED FROM odyssey — DO NOT EDIT */
 /* ============================================================================
-   Odyssey 1.2 canary · HOLDFAST profile + shell language
+   Odyssey 1.2 canary · Steadholme profile + shell language
    ----------------------------------------------------------------------------
    This layer is deliberately inert until a product opts in with the stable
    root contract `data-ody-profile`. `data-ody-shell` adds the full mineral-grid
@@ -53,7 +53,7 @@
   --ody-profile-ink:var(--ok-ink,var(--ody-ok-ink));
 }
 
-/* These orchestration surfaces intentionally use the HOLDFAST oxide accent
+/* These orchestration surfaces intentionally use the Steadholme oxide accent
    rather than borrowing a state colour. Keeping them explicit makes the root
    contract mechanically discoverable and auditable. */
 [data-ody-profile="control"],
@@ -77,7 +77,7 @@
 
 /* Reusable product shell for bespoke templates. Existing page_shell markup also
    receives the shared framing through the appbar/console aliases below. */
-.holdfast-shell,.ody-shell{
+.steadholme-shell,.ody-shell{
   min-height:100dvh;
   display:grid;
   grid-template-columns:minmax(208px,256px) minmax(0,1fr);
@@ -85,8 +85,8 @@
   grid-template-areas:"bar bar" "rail stage";
 }
 
-.holdfast-shell__bar,.ody-shell__bar{grid-area:bar;min-width:0;}
-.holdfast-shell__rail,.ody-shell__rail{
+.steadholme-shell__bar,.ody-shell__bar{grid-area:bar;min-width:0;}
+.steadholme-shell__rail,.ody-shell__rail{
   grid-area:rail;
   position:sticky;
   top:var(--appbar-h,var(--ody-appbar-h,56px));
@@ -96,13 +96,13 @@
   border-right:1px solid var(--ody-profile-rule);
   background:color-mix(in srgb,var(--surface,var(--ody-surface)) 91%,transparent);
 }
-.holdfast-shell__stage,.ody-shell__stage{
+.steadholme-shell__stage,.ody-shell__stage{
   grid-area:stage;
   position:relative;
   min-width:0;
   padding:clamp(20px,3vw,48px);
 }
-.holdfast-shell__stage::before,.ody-shell__stage::before{
+.steadholme-shell__stage::before,.ody-shell__stage::before{
   content:attr(data-ody-coordinate);
   position:absolute;
   top:10px;
@@ -118,14 +118,14 @@
   border-bottom-color:var(--ody-profile-rule);
   box-shadow:inset 0 -2px 0 color-mix(in srgb,var(--ody-profile-signal) 22%,transparent);
 }
-[data-ody-profile] :is(.app-tile,.ody-appbar__tile,.holdfast-shell__mark,.ody-shell__mark){
+[data-ody-profile] :is(.app-tile,.ody-appbar__tile,.steadholme-shell__mark,.ody-shell__mark){
   border-radius:2px;
   background:var(--ody-profile-signal);
   color:var(--surface,var(--ody-surface));
   clip-path:polygon(0 0,calc(100% - 7px) 0,100% 7px,100% 100%,7px 100%,0 calc(100% - 7px));
 }
 
-.holdfast-shell__product,.ody-shell__product{
+.steadholme-shell__product,.ody-shell__product{
   display:grid;
   grid-template-columns:auto minmax(0,1fr);
   gap:var(--sp-3,var(--ody-sp-3));
@@ -134,12 +134,12 @@
   margin-bottom:var(--sp-3,var(--ody-sp-3));
   border-bottom:1px solid var(--ody-profile-rule);
 }
-.holdfast-shell__product-name,.ody-shell__product-name{
+.steadholme-shell__product-name,.ody-shell__product-name{
   color:var(--ink,var(--ody-ink));
   font-weight:650;
   letter-spacing:-.02em;
 }
-.holdfast-shell__product-meta,.ody-shell__product-meta{
+.steadholme-shell__product-meta,.ody-shell__product-meta{
   margin-top:2px;
   color:var(--ody-profile-coordinate);
   font:600 var(--fs-micro,var(--ody-fs-micro))/1.2 var(--mono,var(--ody-mono));
@@ -223,12 +223,12 @@
 }
 
 @media (max-width:780px){
-  .holdfast-shell,.ody-shell{
+  .steadholme-shell,.ody-shell{
     grid-template-columns:1fr;
     grid-template-rows:auto auto minmax(0,1fr);
     grid-template-areas:"bar" "rail" "stage";
   }
-  .holdfast-shell__rail,.ody-shell__rail{
+  .steadholme-shell__rail,.ody-shell__rail{
     position:static;
     min-height:0;
     overflow-x:auto;
@@ -239,7 +239,7 @@
 
 @media (forced-colors:active){
   [data-ody-profile] :is(.appbar,.topbar,.ody-appbar),
-  .holdfast-shell__rail,.ody-shell__rail,
+  .steadholme-shell__rail,.ody-shell__rail,
   .holdfast-profile,.ody-profile,.holdfast-signal,.ody-signal{border-color:CanvasText;box-shadow:none;}
   [data-ody-profile] :is(.appnav,.nav__item,.ody-appbar__nav a,.ody-nav__item)[aria-current="page"]{outline:2px solid Highlight;box-shadow:none;}
 }
