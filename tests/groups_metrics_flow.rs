@@ -33,6 +33,24 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).to_string()
 }
 
+#[tokio::test]
+async fn operational_catalog_groups_start_collapsed() {
+    let state = build_dev_state().await;
+    let (status, body) = call(&state, get("/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = text(&body);
+
+    assert!(
+        html.contains(r#"<details class="cgroup">"#),
+        "operational category uses a native collapsed disclosure"
+    );
+    assert!(
+        !html.contains(r#"<details class="cgroup" open>"#),
+        "no operational category is expanded by default"
+    );
+    assert!(html.contains(r#"class="cgroup__count">2 components"#));
+}
+
 fn post_admin(uri: &str, form: &str) -> Request<Body> {
     Request::builder()
         .method("POST")

@@ -12,6 +12,7 @@
   <style>{{CSS}}</style>
 </head>
 <body class="page-console" data-ody-shell="1.2">
+  <a class="skip-link" href="#status-main">{{SKIP_TO_STATUS}}</a>
   <header class="topbar">
     <div class="topbar__inner">
       <a class="brand" href="/status" aria-label="Steadholme status home">
@@ -26,10 +27,10 @@
     </div>
   </header>
 
-  <main class="console">
+  <main class="console" id="status-main" tabindex="-1" aria-labelledby="status-title">
     <div class="console__head statushead">
       <div class="statushead__text">
-        <h1>{{STATUS_TITLE}}</h1>
+        <h1 id="status-title">{{STATUS_TITLE}}</h1>
         <p class="sub">{{STATUS_SUB}}</p>
       </div>
       <div class="statushead__actions">

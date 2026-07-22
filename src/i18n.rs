@@ -83,6 +83,7 @@ pub static EN: &[(&str, &str)] = &[
     ("status.severity.critical", "critical"),
     ("status.severity.major", "major"),
     ("status.severity.minor", "minor"),
+    ("status.skip_to_content", "Skip to system status"),
     ("status.snapshot.evidence", "days of evidence"),
     ("status.snapshot.incidents", "active incidents"),
     ("status.snapshot.label", "Operational snapshot"),
@@ -201,6 +202,7 @@ pub static ZH: &[(&str, &str)] = &[
     ("status.severity.critical", "严重"),
     ("status.severity.major", "主要"),
     ("status.severity.minor", "轻微"),
+    ("status.skip_to_content", "跳到系统状态"),
     ("status.snapshot.evidence", "天证据窗口"),
     ("status.snapshot.incidents", "当前事故"),
     ("status.snapshot.label", "运行快照"),
@@ -334,6 +336,7 @@ pub static JA: &[(&str, &str)] = &[
     ("status.severity.critical", "critical"),
     ("status.severity.major", "major"),
     ("status.severity.minor", "minor"),
+    ("status.skip_to_content", "システムステータスへ移動"),
     ("status.snapshot.evidence", "日間の履歴"),
     ("status.snapshot.incidents", "進行中のインシデント"),
     ("status.snapshot.label", "稼働スナップショット"),
@@ -417,4 +420,29 @@ fn find(table: &'static [(&'static str, &'static str)], key: &str) -> Option<&'s
         .ok()
         .map(|i| table[i].1)
         .filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EN, JA, ZH};
+
+    #[test]
+    fn locale_catalogs_are_strictly_sorted_and_cover_the_english_keys() {
+        for (name, table) in [("en", EN), ("zh", ZH), ("ja", JA)] {
+            for pair in table.windows(2) {
+                assert!(
+                    pair[0].0 < pair[1].0,
+                    "{name} catalog keys must be sorted and unique: {} then {}",
+                    pair[0].0,
+                    pair[1].0
+                );
+            }
+        }
+
+        let en_keys: Vec<_> = EN.iter().map(|(key, _)| *key).collect();
+        for (name, table) in [("zh", ZH), ("ja", JA)] {
+            let keys: Vec<_> = table.iter().map(|(key, _)| *key).collect();
+            assert_eq!(keys, en_keys, "{name} catalog must cover every English key");
+        }
+    }
 }

@@ -1,10 +1,10 @@
 //! PUBLIC status surface: the server-rendered status page and the machine-readable JSON.
 //!
 //! Both are unauthenticated by design (placed behind a Sluice `auth=public` route). The
-//! page mirrors the Steadholme enterprise brand: app-bar, overall hero, an active-incidents
-//! section (severity-tinted cards with an expandable update timeline), maintenance notices,
-//! compact component rows with rolling uptime + a read-model-declared evidence window,
-//! and a "Past incidents" section (last 14 days, grouped by day).
+//! page mirrors the Steadholme publication identity: app-bar, factual overall state, an
+//! incident-first ledger with expandable update timelines, native category disclosures,
+//! compact component rows with rolling uptime + a read-model-declared evidence window, and a
+//! "Past incidents" section (last 14 days, grouped by day).
 
 use axum::extract::State;
 use axum::http::{header, HeaderMap, HeaderValue};
@@ -277,6 +277,7 @@ fn render_status(
         .replace("{{THEMESWITCH}}", &render_theme_switch(theme))
         .replace("{{USERBOX}}", &userbox(i18n::t(loc, "status.topbar"), None))
         .replace("{{LANGSWITCH}}", &render_lang_switch(loc))
+        .replace("{{SKIP_TO_STATUS}}", i18n::t(loc, "status.skip_to_content"))
         .replace("{{STATUS_TITLE}}", i18n::t(loc, "status.title"))
         .replace("{{STATUS_SUB}}", i18n::t(loc, "status.sub"))
         .replace(
@@ -308,17 +309,19 @@ fn render_status_live(view: &StatusView, now: i64, loc: odyssey::Locale) -> Stri
     format!(
         r#"<div id="{id}" class="status-live" role="region" aria-label="{label}">
 {banner}
-{snapshot}
 {active}
-{maintenance}
-<section class="card">
+{snapshot}
+<section class="card status-components">
   <div class="card__head card__head--split"><h2>{components_title}</h2>{component_count}</div>
   <div class="card__body">{components}</div>
 </section>
+{maintenance}
 {infra}
-<h2 class="section-title">{past_title}</h2>
-<p class="sub">{history_note} <a href="/feed.xml">{rss_feed}</a>.</p>
-{past_incidents}
+<section class="status-history">
+  <h2 class="section-title">{past_title}</h2>
+  <p class="sub">{history_note} <a href="/feed.xml">{rss_feed}</a>.</p>
+  {past_incidents}
+</section>
 </div>"#,
         id = STATUS_LIVE_ID,
         label = esc(i18n::t(loc, "status.live_region")),
@@ -417,6 +420,7 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
         .unwrap_or_default();
     format!(
         r#"<section class="status-hero {cls}">
+  <span class="status-hero__mark status-hero__mark--{state}" aria-hidden="true"></span>
   <div class="status-hero__text">
     <h2 class="status-hero__headline">{headline}</h2>
     <p class="status-hero__sub">{sub}</p>
@@ -427,6 +431,7 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
   </div>
 </section>"#,
         headline = esc(i18n::t(loc, headline_key)),
+        state = state_mod(view.overall),
         sub = esc(i18n::t(loc, sub_key)),
         updated = esc(&i18n::tf(
             loc,
@@ -650,6 +655,8 @@ fn render_component_row(
         "—".to_string()
     };
     let state = state_mod(c.status);
+    let state_label = status_label_l(loc, c.status);
+    let evidence_label = format!("{} · {} · {} · {}", c.name, state_label, pct, pct_title);
     format!(
         r#"<div class="crow">
   <span class="crow__id">
@@ -657,7 +664,7 @@ fn render_component_row(
     <span class="crow__name" title="{name}">{name}</span>
   </span>
   <span class="bc-lat">{spark}<span class="crow__lat" title="24h average · latest {latest_latency}">{latency}</span></span>
-  <div class="crow__track" aria-hidden="true"><div class="bars">{bars}</div></div>
+  <div class="crow__track" role="img" aria-label="{evidence_label}"><div class="bars" aria-hidden="true">{bars}</div></div>
   <span class="crow__pct" title="{pct_title}">{pct}</span>
   <span class="crow__state crow__state--{state}">{label}</span>
   {since}
@@ -669,7 +676,8 @@ fn render_component_row(
         bars = bars,
         pct_title = esc(&pct_title),
         pct = esc(&pct),
-        label = esc(&status_label_l(loc, c.status)),
+        evidence_label = esc(&evidence_label),
+        label = esc(&state_label),
     )
 }
 
@@ -939,8 +947,8 @@ fn render_affected_l(loc: odyssey::Locale, affected: &str) -> String {
     )
 }
 
-/// The "Active incidents" banner section above the components — one severity-tinted card
-/// per non-resolved incident. Empty string (section omitted) when everything is resolved.
+/// The "Active incidents" ledger above the evidence summary and components — one entry per
+/// non-resolved incident. Empty string (section omitted) when everything is resolved.
 fn render_active_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     let active: Vec<&Incident> = view
         .incidents

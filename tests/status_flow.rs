@@ -83,6 +83,14 @@ async fn public_status_renders_without_auth() {
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK, "public status page is open");
     let html = text(&body);
+    let skip = html
+        .find(r##"<a class="skip-link" href="#status-main">"##)
+        .expect("first-focus skip link");
+    let chrome = html.find(r#"<header class="topbar">"#).unwrap();
+    assert!(skip < chrome, "skip link precedes application chrome");
+    assert!(html.contains(
+        r#"<main class="console" id="status-main" tabindex="-1" aria-labelledby="status-title">"#
+    ));
     assert!(html.contains("Steadholme"), "brand present");
     assert!(html.contains("System status"), "page heading present");
     // The fail-safe public catalog shows only explicitly listed components. CA remains an
@@ -101,6 +109,9 @@ async fn public_status_renders_without_auth() {
     assert!(html.contains("No incidents reported in the last 14 days."));
     assert_eq!(html.matches(r#"class="day-group""#).count(), 0);
     assert!(html.contains(r#"class="bc-snapshot""#));
+    assert!(html.contains(r#"class="status-hero__mark status-hero__mark--ok""#));
+    assert!(html.contains(r#"class="card status-components""#));
+    assert!(html.contains(r#"class="crow__track" role="img" aria-label="Gateway"#));
     assert!(html.contains(r#"<span class="card__head-meta">2 monitored</span>"#));
     assert!(!html.contains(r#"action="/subscriptions""#));
     assert!(html.contains("Webhook registration is currently unavailable"));
@@ -397,8 +408,8 @@ async fn public_catalog_aggregates_raw_checks_without_leaking_member_names() {
     assert_eq!(components[0]["latency_ms"], 44);
     assert_eq!(view["groups"][0]["name"], "Delivery");
     let json = text(&body);
-    assert!(!json.contains(r#"\"name\":\"Gateway\""#));
-    assert!(!json.contains(r#"\"name\":\"CA\""#));
+    assert!(!json.contains(r#""name":"Gateway""#));
+    assert!(!json.contains(r#""name":"CA""#));
 }
 
 #[tokio::test]
@@ -538,6 +549,12 @@ async fn incident_lifecycle_shows_on_public_status() {
     assert!(
         html.contains("Partial degradation"),
         "major incident -> degraded banner"
+    );
+    let active = html.find("Active incidents").unwrap();
+    let snapshot = html.find(r#"class="bc-snapshot""#).unwrap();
+    assert!(
+        active < snapshot,
+        "active incidents lead operational evidence"
     );
 
     // And in the JSON API.
@@ -824,7 +841,10 @@ async fn admin_page_renders_with_email() {
         .unwrap();
     let html = text(&bytes);
     assert!(html.contains("Beacon admin"));
-    assert!(html.contains("ops@steadholme.local"), "signed-in email shown");
+    assert!(
+        html.contains("ops@steadholme.local"),
+        "signed-in email shown"
+    );
     assert!(html.contains("/_gw/auth/logout"), "logout link present");
     assert!(html.contains("Post an incident"));
     assert!(html.contains("Schedule maintenance"));
