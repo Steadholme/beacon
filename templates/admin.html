@@ -7,7 +7,8 @@
   <title>Beacon admin · Steadholme</title>
   <style>{{CSS}}</style>
 </head>
-<body class="page-console">
+<body class="page-console bc-desk">
+  <a class="skip-link" href="#desk-main">Skip to operations desk</a>
   <header class="topbar">
     <div class="topbar__inner">
       <a class="brand" href="/admin" aria-label="Steadholme Beacon admin">
@@ -21,35 +22,20 @@
     </div>
   </header>
 
-  <main class="console">
+  <main class="console" id="desk-main" tabindex="-1">
     <div class="console__head">
       <h1>Beacon admin</h1>
       <p class="sub">Signed in as {{EMAIL}}. Monitored checks and incident control.</p>
     </div>
+    {{SLATE}}
     {{SUMMARY}}
     {{ADMINNAV}}
 
     <div class="card-stack">
-      <section class="card" id="checks">
-        <div class="card__head"><h2>Monitored checks</h2></div>
+      <section class="card" id="bc-incidents">
+        <div class="card__head"><h2>Recent incidents</h2></div>
         <div class="card__body">
-          <div class="bc-scroll">
-          <table class="table">
-            <thead>
-              <tr><th>Component</th><th>Kind</th><th>Target</th><th>Current</th><th>Latency</th></tr>
-            </thead>
-            <tbody>
-              {{CHECKS}}
-            </tbody>
-          </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="card" id="infra">
-        <div class="card__head card__head--split"><h2>Infrastructure</h2><span class="card__head-meta bc-infra__meta">{{INFRA_META}}</span></div>
-        <div class="card__body">
-          {{INFRA}}
+          {{INCIDENTS}}
         </div>
       </section>
 
@@ -95,10 +81,10 @@
         </div>
       </section>
 
-      <section class="card" id="bc-incidents">
-        <div class="card__head"><h2>Recent incidents</h2></div>
+      <section class="card" id="maintenances">
+        <div class="card__head"><h2>Maintenance windows</h2></div>
         <div class="card__body">
-          {{INCIDENTS}}
+          {{MAINTENANCES}}
         </div>
       </section>
 
@@ -134,10 +120,26 @@
         </div>
       </section>
 
-      <section class="card" id="maintenances">
-        <div class="card__head"><h2>Maintenance windows</h2></div>
+      <section class="card" id="checks">
+        <div class="card__head"><h2>Monitored checks</h2></div>
         <div class="card__body">
-          {{MAINTENANCES}}
+          <div class="bc-scroll">
+          <table class="table">
+            <thead>
+              <tr><th>Component</th><th>Kind</th><th>Target</th><th>Current</th><th>Latency</th></tr>
+            </thead>
+            <tbody>
+              {{CHECKS}}
+            </tbody>
+          </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="infra">
+        <div class="card__head card__head--split"><h2>Infrastructure</h2><span class="card__head-meta bc-infra__meta">{{INFRA_META}}</span></div>
+        <div class="card__body">
+          {{INFRA}}
         </div>
       </section>
 

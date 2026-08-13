@@ -873,6 +873,30 @@ async fn admin_page_renders_with_email() {
         html.contains(token),
         "hidden field carries the cookie token"
     );
+    // Desk structure: skip link, bc-desk class, slate, attention-first summary order.
+    assert!(html.contains(r#"class="skip-link""#), "skip link present");
+    assert!(
+        html.contains(r##"href="#desk-main""##),
+        "skip link targets desk main"
+    );
+    assert!(
+        html.contains(r#"class="page-console bc-desk""#),
+        "bc-desk class present"
+    );
+    assert!(html.contains(r#"class="bc-slate"#), "slate section present");
+    let checks_pos = html.find(r#"id="checks""#).unwrap_or(usize::MAX);
+    let slate_pos = html.find(r#"class="bc-slate"#).unwrap_or(usize::MAX);
+    assert!(
+        slate_pos < checks_pos,
+        "slate appears before checks section"
+    );
+    // Summary tiles: Down tile appears before Operational.
+    let down_tile = html.find("Down").unwrap_or(usize::MAX);
+    let operational_tile = html.find("Operational").unwrap_or(usize::MAX);
+    assert!(
+        down_tile < operational_tile,
+        "Down tile precedes Operational tile"
+    );
 }
 
 #[tokio::test]
@@ -884,6 +908,144 @@ async fn admin_page_rejects_anonymous_reads() {
         assert!(!text(&body).contains("Post an incident"));
         assert!(!text(&body).contains("Status subscribers"));
     }
+}
+
+#[tokio::test]
+async fn admin_slate_reflects_attention_states() {
+    let state = build_dev_state().await;
+    let now = crate::now_secs();
+    state.store.insert_result("Gateway", false, 0, now).await;
+    state
+        .store
+        .insert_incident(&beacon::store::Incident {
+            id: "inc_test".to_string(),
+            title: "Test incident".to_string(),
+            status: "investigating".to_string(),
+            severity: "major".to_string(),
+            affected: "Gateway".to_string(),
+            body: "Something is wrong".to_string(),
+            created_at: now,
+            updated_at: now,
+            resolved_at: 0,
+        })
+        .await;
+
+    let req = Request::builder()
+        .uri("/admin")
+        .header("x-auth-subject", "u_admin")
+        .header("x-auth-email", "ops@steadholme.local")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app(state.clone()).oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = text(&bytes);
+
+    assert!(
+        html.contains(r#"class="bc-slate bc-slate--alert""#),
+        "slate is in alert state"
+    );
+    assert!(
+        html.contains("COMPONENT") && html.contains("DOWN"),
+        "slate lead mentions down components"
+    );
+    assert!(
+        html.contains("OPEN INCIDENT"),
+        "slate lead mentions open incidents"
+    );
+    assert!(html.contains("Gateway"), "down component name shown");
+    assert!(
+        html.contains(r##"href="#bc-incidents""##),
+        "slate links to incidents"
+    );
+
+    // Resolve incident and mark Gateway as ok.
+    // Use a timestamp that is strictly greater than now to ensure latest_result picks it up
+    let now2 = now + 10;
+    state
+        .store
+        .set_incident_status("inc_test", "resolved", now2, now2)
+        .await;
+    state.store.insert_result("Gateway", true, 0, now2).await;
+
+    let req2 = Request::builder()
+        .uri("/admin")
+        .header("x-auth-subject", "u_admin")
+        .header("x-auth-email", "ops@steadholme.local")
+        .body(Body::empty())
+        .unwrap();
+    let resp2 = app(state.clone()).oneshot(req2).await.unwrap();
+    let bytes2 = axum::body::to_bytes(resp2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html2 = text(&bytes2);
+
+    assert!(
+        html2.contains(r#"class="bc-slate bc-slate--quiet""#),
+        "slate is in quiet state"
+    );
+    assert!(
+        html2.contains("All quiet"),
+        "quiet slate shows all-quiet message"
+    );
+    assert!(
+        !html2.contains(r#"class="bc-slate bc-slate--alert""#),
+        "alert class is absent"
+    );
+}
+
+#[tokio::test]
+async fn admin_open_incidents_render_before_resolved() {
+    let state = build_dev_state().await;
+    let now = crate::now_secs();
+    state
+        .store
+        .insert_incident(&beacon::store::Incident {
+            id: "inc_open".to_string(),
+            title: "Open incident".to_string(),
+            status: "investigating".to_string(),
+            severity: "minor".to_string(),
+            affected: "".to_string(),
+            body: "Still investigating".to_string(),
+            created_at: now - 100,
+            updated_at: now - 100,
+            resolved_at: 0,
+        })
+        .await;
+    state
+        .store
+        .insert_incident(&beacon::store::Incident {
+            id: "inc_resolved".to_string(),
+            title: "Resolved incident".to_string(),
+            status: "resolved".to_string(),
+            severity: "major".to_string(),
+            affected: "".to_string(),
+            body: "Fixed".to_string(),
+            created_at: now - 200,
+            updated_at: now - 50,
+            resolved_at: now - 50,
+        })
+        .await;
+
+    let req = Request::builder()
+        .uri("/admin")
+        .header("x-auth-subject", "u_admin")
+        .header("x-auth-email", "ops@steadholme.local")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app(state.clone()).oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = text(&bytes);
+
+    let open_pos = html.find("Open incident").unwrap_or(usize::MAX);
+    let resolved_pos = html.find("Resolved incident").unwrap_or(usize::MAX);
+    assert!(
+        open_pos < resolved_pos,
+        "open incident appears before resolved incident"
+    );
 }
 
 #[tokio::test]
@@ -899,4 +1061,68 @@ async fn empty_incident_title_rejected() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "empty title -> 400");
+}
+
+/// Served-CSS regression guard: the operator desk layer is a `.bc-desk`/`.bc-slate`-scoped
+/// block tail-appended after the byte-stable publication baseline. `app_css()` inlines
+/// unlayered Odyssey CSS before `service.css`, so wrapping service CSS in a named `@layer`
+/// demotes every Beacon override below Odyssey. If cascade layers are ever introduced
+/// legitimately, the same stylesheet must first declare the `@layer odyssey, beacon;`
+/// order and this assertion must be updated alongside it.
+#[tokio::test]
+async fn service_css_stays_unlayered_and_keeps_shared_chrome() {
+    let state = build_dev_state().await;
+    let (status, body) = call(&state, get("/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = text(&body);
+
+    // Cascade guard: the served document carries no cascade layer.
+    assert!(!html.contains("@layer"), "service CSS stays unlayered");
+
+    // Menu guard: the public updates menu stays native-<details> driven. The `open`
+    // attribute lives on <details>, never on the <nav>, so an author rule keyed on
+    // `.updates-pop__menu[open]` pins the menu shut.
+    assert!(
+        !html.contains(".updates-pop__menu[open]"),
+        "no author rule may key the updates menu on [open]"
+    );
+    assert!(
+        html.contains(r#"<details class="updates-pop">"#),
+        "updates menu markup stays a native <details>"
+    );
+    assert!(
+        html.contains(".updates-pop__btn::-webkit-details-marker"),
+        "baseline marker-hiding rule for the native summary stays served"
+    );
+
+    // Chrome guard: the topbar chrome actually emitted by `userbox()` keeps its base
+    // rules; the orphan `.userbox*` family stays gone.
+    assert!(
+        html.contains(".userchip {"),
+        "userchip base rule stays served"
+    );
+    assert!(
+        html.contains(".userchip__avatar {"),
+        "userchip avatar base rule stays served"
+    );
+    assert!(
+        html.contains(".allapps {"),
+        "allapps base rule stays served"
+    );
+    assert!(
+        !html.contains(".userbox {"),
+        "orphan .userbox rules stay gone"
+    );
+
+    // Order guard: the desk layer stays appended after the publication layer.
+    let publication = html
+        .find("Public status · Beacon publication layer")
+        .expect("publication layer marker present");
+    let desk = html
+        .find("Operator desk layer")
+        .expect("operator desk layer marker present");
+    assert!(
+        publication < desk,
+        "desk layer stays appended after the publication layer"
+    );
 }

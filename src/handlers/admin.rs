@@ -471,8 +471,137 @@ fn render_template_buttons() -> String {
 // Rendering
 // ---------------------------------------------------------------------------
 
+/// Desk counts computed once and reused by slate and summary.
+struct DeskCounts {
+    operational: usize,
+    down: usize,
+    pending: usize,
+    open_incidents: usize,
+    visible_maint: usize,
+    confirmed: usize,
+    hosts: usize,
+}
+
+async fn compute_desk_counts(
+    checks: &[crate::store::Check],
+    incidents: &[Incident],
+    maintenances: &[Maintenance],
+    state: &AppState,
+    now: i64,
+) -> DeskCounts {
+    let mut operational = 0usize;
+    let mut down = 0usize;
+    let mut pending = 0usize;
+    for c in checks {
+        match state.store.latest_result(&c.name).await.map(|r| r.ok) {
+            Some(true) => operational += 1,
+            Some(false) => down += 1,
+            None => pending += 1,
+        }
+    }
+    let open_incidents = incidents.iter().filter(|i| i.status != "resolved").count();
+    let visible_maint = maintenances.iter().filter(|m| m.ends_at > now).count();
+    let subs = state.store.list_subscribers().await;
+    let confirmed = subs.iter().filter(|s| s.confirmed).count();
+    let hosts = state
+        .vitals
+        .as_ref()
+        .and_then(|v| v.snapshot())
+        .map(|s| s.hosts.len())
+        .unwrap_or(0);
+    DeskCounts {
+        operational,
+        down,
+        pending,
+        open_incidents,
+        visible_maint,
+        confirmed,
+        hosts,
+    }
+}
+
+async fn render_desk_slate(
+    counts: &DeskCounts,
+    incidents: &[Incident],
+    maintenances: &[Maintenance],
+    checks: &[crate::store::Check],
+    state: &AppState,
+    now: i64,
+) -> String {
+    let is_alert = counts.down > 0 || counts.open_incidents > 0;
+    if !is_alert {
+        return format!(
+            r#"<section class="bc-slate bc-slate--quiet" aria-labelledby="slate-title">
+  <div class="bc-slate__lead" id="slate-title">All quiet — {} checks operational, no open incidents.</div>
+</section>"#,
+            counts.operational
+        );
+    }
+
+    // Alert state: build lead line and attention ledger.
+    let mut lead_parts = Vec::new();
+    if counts.down > 0 {
+        lead_parts.push(format!(
+            "{} COMPONENT{} DOWN",
+            counts.down,
+            if counts.down == 1 { "" } else { "S" }
+        ));
+    }
+    if counts.open_incidents > 0 {
+        lead_parts.push(format!(
+            "{} OPEN INCIDENT{}",
+            counts.open_incidents,
+            if counts.open_incidents == 1 { "" } else { "S" }
+        ));
+    }
+    let lead = lead_parts.join(" · ");
+
+    let mut ledger = String::new();
+    // Down components first.
+    for c in checks {
+        if let Some(r) = state.store.latest_result(&c.name).await {
+            if !r.ok {
+                ledger.push_str(&format!(
+                    r##"<div class="bc-slate__item"><span class="bc-slate__mark bc-slate__mark--down" aria-hidden="true"></span><a href="#checks" class="bc-slate__link">{name}</a></div>"##,
+                    name = esc(&c.name)
+                ));
+            }
+        }
+    }
+    // Open incidents.
+    for inc in incidents.iter().filter(|i| i.status != "resolved") {
+        ledger.push_str(&format!(
+            r##"<div class="bc-slate__item">{sev} {status} <span class="bc-slate__time">{ago}</span><a href="#bc-incidents" class="bc-slate__link">{title}</a></div>"##,
+            sev = severity_pill(&inc.severity),
+            status = incident_status_pill(&inc.status),
+            ago = esc(&rel_time(inc.created_at, now)),
+            title = esc(&inc.title),
+        ));
+    }
+    // Ongoing maintenance.
+    for m in maintenances.iter().filter(|m| maintenance_ongoing(m, now)) {
+        ledger.push_str(&format!(
+            r##"<div class="bc-slate__item"><span class="pill pill-info">maintenance</span><a href="#maintenances" class="bc-slate__link">{title}</a></div>"##,
+            title = esc(&m.title)
+        ));
+    }
+
+    format!(
+        r#"<section class="bc-slate bc-slate--alert" aria-labelledby="slate-title">
+  <div class="bc-slate__lead" id="slate-title">{lead}</div>
+  <div class="bc-slate__ledger">{ledger}</div>
+</section>"#,
+        lead = esc(&lead),
+        ledger = ledger,
+    )
+}
+
 async fn render_admin(state: &AppState, email: &str, csrf: &str, now: i64, theme: &str) -> String {
     let vitals = state.vitals.as_ref().and_then(|v| v.snapshot());
+    let checks = state.store.list_checks().await;
+    let incidents = state.store.list_incidents().await;
+    let maintenances = state.store.list_maintenances().await;
+    let counts = compute_desk_counts(&checks, &incidents, &maintenances, state, now).await;
     ADMIN_HTML
         .replace("{{CSS}}", app_css())
         .replace("{{THEME}}", odyssey::html_theme_attr(theme))
@@ -481,9 +610,13 @@ async fn render_admin(state: &AppState, email: &str, csrf: &str, now: i64, theme
         .replace("{{THEMESWITCH}}", &render_theme_switch(theme))
         .replace("{{USERBOX}}", &userbox("Beacon admin", Some(email)))
         .replace("{{EMAIL}}", &esc(email))
-        .replace("{{SUMMARY}}", &render_summary(state, now).await)
+        .replace(
+            "{{SLATE}}",
+            &render_desk_slate(&counts, &incidents, &maintenances, &checks, state, now).await,
+        )
+        .replace("{{SUMMARY}}", &render_summary(&counts))
         .replace("{{ADMINNAV}}", &render_admin_nav())
-        .replace("{{CHECKS}}", &render_checks(state).await)
+        .replace("{{CHECKS}}", &render_checks_rows(&checks, state).await)
         .replace("{{INFRA_META}}", &render_infra_meta(vitals.as_deref(), now))
         .replace("{{INFRA}}", &render_admin_infra(vitals.as_deref(), now))
         .replace("{{TEMPLATES_CREATE}}", &render_template_buttons())
@@ -495,44 +628,20 @@ async fn render_admin(state: &AppState, email: &str, csrf: &str, now: i64, theme
         .replace("{{SCRIPTS}}", dynamic_js())
 }
 
-async fn render_summary(state: &AppState, now: i64) -> String {
-    let checks = state.store.list_checks().await;
-    let mut operational = 0usize;
+fn render_summary(counts: &DeskCounts) -> String {
     let degraded = 0usize;
-    let mut down = 0usize;
-    let mut pending = 0usize;
-    for c in &checks {
-        match state.store.latest_result(&c.name).await.map(|r| r.ok) {
-            Some(true) => operational += 1,
-            Some(false) => down += 1,
-            None => pending += 1,
-        }
-    }
-    let incidents = state.store.list_incidents().await;
-    let open_incidents = incidents.iter().filter(|i| i.status != "resolved").count();
-    let maintenances = state.store.list_maintenances().await;
-    let visible_maint = maintenances.iter().filter(|m| m.ends_at > now).count();
-    let subs = state.store.list_subscribers().await;
-    let confirmed = subs.iter().filter(|s| s.confirmed).count();
-    let hosts = state
-        .vitals
-        .as_ref()
-        .and_then(|v| v.snapshot())
-        .map(|s| s.hosts.len())
-        .unwrap_or(0);
-
     format!(
         r#"<div class="bc-sum">
-  {op}{deg}{down}{pending}{inc}{mw}{subs}{hosts}
+  {down}{inc}{pending}{deg}{mw}{op}{subs}{hosts}
 </div>"#,
-        op = summary_tile("Operational", operational, ""),
+        down = summary_tile("Down", counts.down, " bc-sum__n--down"),
+        inc = summary_tile("Open incidents", counts.open_incidents, ""),
+        pending = summary_tile("Pending", counts.pending, " bc-sum__n--warn"),
         deg = summary_tile("Degraded", degraded, " bc-sum__n--warn"),
-        down = summary_tile("Down", down, " bc-sum__n--down"),
-        pending = summary_tile("Pending", pending, " bc-sum__n--warn"),
-        inc = summary_tile("Open incidents", open_incidents, ""),
-        mw = summary_tile("Maintenance", visible_maint, ""),
-        subs = summary_tile("Confirmed subs", confirmed, ""),
-        hosts = summary_tile("Hosts", hosts, ""),
+        mw = summary_tile("Maintenance", counts.visible_maint, ""),
+        op = summary_tile("Operational", counts.operational, ""),
+        subs = summary_tile("Confirmed subs", counts.confirmed, ""),
+        hosts = summary_tile("Hosts", counts.hosts, ""),
     )
 }
 
@@ -545,11 +654,12 @@ fn summary_tile(label: &str, n: usize, cls: &str) -> String {
 
 fn render_admin_nav() -> String {
     r##"<nav class="bc-adminnav" aria-label="Admin sections">
+  <a href="#bc-incidents">Incidents</a>
+  <a href="#post-incident">Post incident</a>
+  <a href="#maintenances">Maintenance</a>
+  <a href="#maintenance">Schedule</a>
   <a href="#checks">Checks</a>
   <a href="#infra">Infrastructure</a>
-  <a href="#post-incident">Post incident</a>
-  <a href="#bc-incidents">Incidents</a>
-  <a href="#maintenance">Maintenance</a>
   <a href="#bc-groups">Groups</a>
   <a href="#subscribers">Subscribers</a>
 </nav>"##
@@ -718,13 +828,12 @@ fn bc_spark(values: &[f64], max: f64) -> String {
     )
 }
 
-async fn render_checks(state: &AppState) -> String {
-    let checks = state.store.list_checks().await;
+async fn render_checks_rows(checks: &[crate::store::Check], state: &AppState) -> String {
     if checks.is_empty() {
         return r#"<tr><td colspan="5" class="empty">No checks configured.</td></tr>"#.to_string();
     }
     let mut rows = String::new();
-    for c in &checks {
+    for c in checks {
         let latest = state.store.latest_result(&c.name).await;
         let status = match latest.as_ref().map(|r| r.ok) {
             Some(true) => "operational",
@@ -751,8 +860,21 @@ async fn render_incidents(state: &AppState, csrf: &str, now: i64) -> String {
         return r#"<div class="empty">No incidents posted yet.</div>"#.to_string();
     }
     let updates = state.store.list_incident_updates().await;
+
+    // Separate open and resolved incidents.
+    let open: Vec<&Incident> = incidents
+        .iter()
+        .filter(|i| i.status != "resolved")
+        .collect();
+    let resolved: Vec<&Incident> = incidents
+        .iter()
+        .filter(|i| i.status == "resolved")
+        .collect();
+    // Each group keeps store's created_at desc order (already provided by store.rs:319).
+
     let mut items = String::new();
-    for inc in &incidents {
+    // Render open incidents first.
+    for inc in open.iter().chain(resolved.iter()) {
         let mut timeline = String::new();
         for u in updates.iter().filter(|u| u.incident_id == inc.id) {
             timeline.push_str(&format!(

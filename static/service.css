@@ -640,3 +640,133 @@ html[data-ody-profile="public"] {
   }
   .page-console .cgroup__head:focus-visible { outline-color: Highlight; }
 }
+
+/* Operator desk layer — incident-first publication continuation for admin. */
+.bc-desk {
+  --beacon-display: var(--serif);
+  --beacon-rule: var(--frame-rule);
+  --beacon-rule-soft: color-mix(in srgb, var(--ink) 22%, var(--border));
+}
+.bc-desk .console__head {
+  position: relative; margin-bottom: 26px; padding-bottom: 18px;
+  border-bottom: 1px solid var(--beacon-rule-soft);
+}
+.bc-desk .console__head::before {
+  content: "STEADHOLME STATUS · OPERATIONS DESK"; position: absolute; top: -7px; left: 0;
+  font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.bc-desk .console__head h1 {
+  font-family: var(--beacon-display); font-size: clamp(26px, 4vw, 40px);
+  font-weight: 600; line-height: 1; letter-spacing: -.03em; margin-top: 24px;
+}
+
+.bc-slate {
+  margin: 0 0 28px; padding: 20px 0; overflow: visible;
+  border-top: 2px solid var(--beacon-rule); border-bottom: 2px solid var(--beacon-rule);
+}
+.bc-slate__lead {
+  font-family: var(--mono); font-size: 14px; font-weight: 700; letter-spacing: .075em;
+  text-transform: uppercase; color: var(--ink); margin: 0 0 16px;
+}
+.bc-slate--quiet .bc-slate__lead {
+  display: flex; align-items: center; gap: 12px;
+}
+.bc-slate--quiet .bc-slate__lead::before {
+  content: ""; width: 14px; height: 14px; flex: none; border-radius: 50%;
+  background: var(--ok);
+}
+.bc-slate__ledger {
+  display: flex; flex-direction: column; gap: 10px; padding-top: 16px;
+  border-top: 1px solid var(--beacon-rule-soft);
+}
+.bc-slate__item {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 0;
+  border-bottom: 1px solid var(--beacon-rule-soft);
+}
+.bc-slate__item:last-child { border-bottom: 0; }
+.bc-slate__mark {
+  width: 12px; height: 12px; flex: none; background: var(--down);
+}
+.bc-slate__mark--down { border-radius: 0; }
+.bc-slate__time {
+  font-size: 12px; color: var(--ink-3); margin-left: auto;
+}
+.bc-slate__link {
+  color: var(--ink); text-decoration: none; font-weight: 600; font-size: 14px;
+}
+.bc-slate__link:hover { color: var(--accent); }
+.bc-slate__link:focus-visible {
+  outline: 3px solid var(--accent); outline-offset: 2px;
+}
+
+.bc-desk .bc-sum {
+  border-bottom: 2px solid var(--beacon-rule); padding-bottom: 18px; margin-bottom: 18px;
+}
+.bc-desk .bc-sum__tile {
+  padding: 13px 0; border: 0; border-left: 2px solid var(--beacon-rule-soft);
+  border-radius: 0; background: transparent;
+}
+.bc-desk .bc-sum__tile:first-child { padding-left: 0; border-left: 0; }
+.bc-desk .bc-sum__n { font-size: 22px; }
+
+.bc-desk .bc-adminnav {
+  margin-bottom: 28px;
+}
+.bc-desk .bc-adminnav a {
+  min-height: 36px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent;
+  border-radius: 0; background: transparent; font-family: var(--mono);
+  font-size: 11px; font-weight: 700; letter-spacing: .065em; text-transform: uppercase;
+  color: var(--ink-2);
+}
+.bc-desk .bc-adminnav a:hover {
+  background: transparent; color: var(--ink); border-bottom-color: var(--accent);
+}
+.bc-desk .bc-adminnav a:focus-visible {
+  outline: 3px solid var(--accent); outline-offset: -3px;
+}
+
+.bc-desk .card {
+  border: 0; border-top: 2px solid var(--beacon-rule); border-radius: 0;
+  background: transparent; background-image: none; box-shadow: none;
+}
+.bc-desk .card:hover { border-color: var(--beacon-rule); box-shadow: none; }
+.bc-desk .card__head {
+  padding: 13px 0; border-bottom: 1px solid var(--beacon-rule-soft);
+}
+.bc-desk .card__head h2 {
+  font-family: var(--beacon-display); font-size: 20px; font-weight: 600; letter-spacing: -.01em;
+}
+.bc-desk .card__body {
+  padding: 18px 0;
+}
+
+@media (max-width: 720px) {
+  .bc-desk .console__head::before { font-size: 10px; }
+  .bc-slate__ledger { gap: 8px; }
+  .bc-slate__item { flex-wrap: wrap; gap: 8px; }
+  .bc-slate__time { margin-left: 0; order: -1; }
+  .bc-desk .bc-sum { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+}
+
+@media (max-width: 420px) {
+  .bc-desk .bc-sum__tile { padding: 10px 8px; }
+  .bc-desk .bc-sum__tile:nth-child(odd) { padding-left: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bc-desk .bc-adminnav a { transition: none; }
+}
+
+@media (forced-colors: active) {
+  .bc-desk .console__head,
+  .bc-desk .bc-slate,
+  .bc-desk .bc-sum,
+  .bc-desk .card { border-color: CanvasText; }
+  .bc-desk .bc-slate__mark,
+  .bc-desk .bc-slate--quiet .bc-slate__lead::before {
+    forced-color-adjust: none; border: 1px solid CanvasText; background: CanvasText;
+  }
+  .bc-desk .bc-adminnav a:hover,
+  .bc-desk .bc-adminnav a:focus-visible { border-bottom-color: Highlight; }
+}
