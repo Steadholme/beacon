@@ -34,19 +34,27 @@ fn text(bytes: &[u8]) -> String {
 }
 
 #[tokio::test]
-async fn operational_catalog_groups_start_collapsed() {
+async fn operational_catalog_opens_exactly_the_first_group() {
     let state = build_dev_state().await;
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK);
     let html = text(&body);
 
-    assert!(
-        html.contains(r#"<details class="cgroup">"#),
-        "operational category uses a native collapsed disclosure"
+    // The disclosure model always presents exactly one open fold: with every rollup
+    // operational the first (and here only) catalog group is the focus.
+    assert_eq!(
+        html.matches(r#"<details class="cgroup""#).count(),
+        1,
+        "the single catalog group renders one native disclosure"
+    );
+    assert_eq!(
+        html.matches(r#"<details class="cgroup" open>"#).count(),
+        1,
+        "exactly one disclosure starts open on an all-operational page"
     );
     assert!(
-        !html.contains(r#"<details class="cgroup" open>"#),
-        "no operational category is expanded by default"
+        html.contains(r#"class="cgroup__name">Core"#),
+        "the open fold is the first catalog group"
     );
     assert!(html.contains(r#"class="cgroup__count">2 components"#));
 }

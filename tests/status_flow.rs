@@ -9,6 +9,7 @@
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use beacon::config::{Config, PublicComponent};
+use beacon::store::{Incident, Maintenance};
 use beacon::{app, build_dev_state, internal_app, now_secs, state_with, AppState};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -550,11 +551,11 @@ async fn incident_lifecycle_shows_on_public_status() {
         html.contains("Partial degradation"),
         "major incident -> degraded banner"
     );
-    let active = html.find("Active incidents").unwrap();
     let snapshot = html.find(r#"class="bc-snapshot""#).unwrap();
+    let active = html.find("Active incidents").unwrap();
     assert!(
-        active < snapshot,
-        "active incidents lead operational evidence"
+        snapshot < active,
+        "snapshot precedes active incidents in new order"
     );
 
     // And in the JSON API.
@@ -1124,5 +1125,483 @@ async fn service_css_stays_unlayered_and_keeps_shared_chrome() {
     assert!(
         publication < desk,
         "desk layer stays appended after the publication layer"
+    );
+}
+
+/// A two-group public catalog over the seeded dev checks — "Edge" carries Gateway and
+/// "Accounts" carries Identity — so the section-focus rank rules are observable over HTTP.
+/// CA stays an internal, unlisted probe exactly as in the dev catalog.
+fn two_group_config() -> Config {
+    let mut config = Config::dev();
+    config.public_catalog = vec![
+        PublicComponent {
+            name: "Gateway".to_string(),
+            group: "Edge".to_string(),
+            checks: vec!["Gateway".to_string()],
+        },
+        PublicComponent {
+            name: "Identity".to_string(),
+            group: "Accounts".to_string(),
+            checks: vec!["Identity".to_string()],
+        },
+    ];
+    config
+}
+
+/// Ordered `(section name, starts open)` pairs for every rendered category disclosure.
+fn section_states(html: &str) -> Vec<(String, bool)> {
+    let name_marker = r#"class="cgroup__name">"#;
+    html.split(r#"<details class="cgroup""#)
+        .skip(1)
+        .map(|chunk| {
+            let start = chunk.find(name_marker).expect("cgroup name") + name_marker.len();
+            let end = chunk[start..].find('<').expect("cgroup name close") + start;
+            (chunk[start..end].to_string(), chunk.starts_with(" open>"))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn all_operational_opens_exactly_the_first_section() {
+    // Single-group dev catalog: the lone Core section is the focus even when healthy.
+    let state = build_dev_state().await;
+    let now = now_secs();
+    state
+        .store
+        .insert_result("Gateway", true, 10, now - 60)
+        .await;
+    state
+        .store
+        .insert_result("Identity", true, 12, now - 60)
+        .await;
+    let (status, body) = call(&state, get("/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = text(&body);
+    assert!(html.contains("All systems operational"));
+    assert_eq!(
+        section_states(&html),
+        vec![("Core".to_string(), true)],
+        "an all-operational page still opens its first (only) section"
+    );
+
+    // Multi-group catalog: the first section wins the all-operational focus.
+    let state = state_with(two_group_config()).await;
+    state
+        .store
+        .insert_result("Gateway", true, 10, now - 60)
+        .await;
+    state
+        .store
+        .insert_result("Identity", true, 12, now - 60)
+        .await;
+    let (_, body) = call(&state, get("/status")).await;
+    let html = text(&body);
+    assert_eq!(
+        section_states(&html),
+        vec![("Edge".to_string(), true), ("Accounts".to_string(), false)]
+    );
+    assert!(
+        !html.contains(r#"class="status-hero__affected""#),
+        "an all-operational page never shows the affected line"
+    );
+}
+
+#[tokio::test]
+async fn down_section_beats_an_earlier_degraded_section() {
+    let state = state_with(two_group_config()).await;
+    let now = now_secs();
+    // Edge/Gateway: one failure inside the 24h window with a healthy latest probe -> degraded.
+    state
+        .store
+        .insert_result("Gateway", false, 0, now - 900)
+        .await;
+    state
+        .store
+        .insert_result("Gateway", true, 10, now - 300)
+        .await;
+    // Accounts/Identity: latest probe failing -> down.
+    state
+        .store
+        .insert_result("Identity", false, 0, now - 60)
+        .await;
+
+    let (_, body) = call(&state, get("/status")).await;
+    assert_eq!(
+        section_states(&text(&body)),
+        vec![("Edge".to_string(), false), ("Accounts".to_string(), true)],
+        "rank strict-max: a later down section outranks an earlier degraded one"
+    );
+}
+
+#[tokio::test]
+async fn degraded_section_beats_an_earlier_maintenance_section() {
+    let state = state_with(two_group_config()).await;
+    let now = now_secs();
+    // An ongoing window masks Gateway, so the Edge rollup reads "maintenance". With nothing
+    // else non-operational the maintenance fold itself is the focus.
+    state
+        .store
+        .insert_maintenance(&Maintenance {
+            id: "mw_rank".to_string(),
+            title: "Edge relocation".to_string(),
+            body: "Racking the edge pair".to_string(),
+            starts_at: now - 600,
+            ends_at: now + 3_600,
+            affected: "Gateway".to_string(),
+        })
+        .await;
+    let (_, body) = call(&state, get("/status")).await;
+    assert_eq!(
+        section_states(&text(&body)),
+        vec![("Edge".to_string(), true), ("Accounts".to_string(), false)],
+        "a maintenance rollup outranks operational sections"
+    );
+
+    // Identity degrades (failure in the window, healthy latest probe): degraded outranks
+    // the earlier maintenance fold and takes the focus from it.
+    state
+        .store
+        .insert_result("Identity", false, 0, now - 900)
+        .await;
+    state
+        .store
+        .insert_result("Identity", true, 12, now - 300)
+        .await;
+    let (_, body) = call(&state, get("/status")).await;
+    assert_eq!(
+        section_states(&text(&body)),
+        vec![("Edge".to_string(), false), ("Accounts".to_string(), true)]
+    );
+}
+
+#[tokio::test]
+async fn equal_rank_sections_keep_the_earliest_one_open() {
+    let state = state_with(two_group_config()).await;
+    let now = now_secs();
+    state
+        .store
+        .insert_result("Gateway", false, 0, now - 60)
+        .await;
+    state
+        .store
+        .insert_result("Identity", false, 0, now - 60)
+        .await;
+    let (_, body) = call(&state, get("/status")).await;
+    assert_eq!(
+        section_states(&text(&body)),
+        vec![("Edge".to_string(), true), ("Accounts".to_string(), false)],
+        "equal ranks keep first-wins ordering"
+    );
+}
+
+#[tokio::test]
+async fn affected_line_derives_from_component_states_without_incidents() {
+    let state = build_dev_state().await;
+    let now = now_secs();
+    // A failing probe with NO incident on file still yields a truthful affected line.
+    state
+        .store
+        .insert_result("Gateway", false, 0, now - 60)
+        .await;
+    state
+        .store
+        .insert_result("Identity", true, 12, now - 60)
+        .await;
+    let (_, body) = call(&state, get("/status")).await;
+    let html = text(&body);
+    assert!(
+        html.contains(r#"<span class="status-hero__affected">"#),
+        "affected line appears without any incident"
+    );
+    assert!(html.contains("1 of 2 components affected"));
+    assert!(
+        !html.contains("Active incidents"),
+        "no incident ledger is involved"
+    );
+}
+
+#[tokio::test]
+async fn maintenance_masking_counts_toward_affected_without_an_incident() {
+    let state = build_dev_state().await;
+    let now = now_secs();
+    state
+        .store
+        .insert_result("Gateway", true, 10, now - 60)
+        .await;
+    state
+        .store
+        .insert_result("Identity", true, 12, now - 60)
+        .await;
+    state
+        .store
+        .insert_maintenance(&Maintenance {
+            id: "mw_mask".to_string(),
+            title: "Identity re-key".to_string(),
+            body: "Rotating signing keys".to_string(),
+            starts_at: now - 300,
+            ends_at: now + 1_800,
+            affected: "Identity".to_string(),
+        })
+        .await;
+    let (_, body) = call(&state, get("/status")).await;
+    let html = text(&body);
+    assert!(html.contains(r#"<h2 class="section-title">Maintenance</h2>"#));
+    assert!(
+        html.contains("1 of 2 components affected"),
+        "a maintenance-masked component is not operational right now"
+    );
+}
+
+#[tokio::test]
+async fn incident_names_never_inflate_the_affected_line() {
+    let state = build_dev_state().await;
+    let now = now_secs();
+    state
+        .store
+        .insert_result("Gateway", true, 10, now - 60)
+        .await;
+    state
+        .store
+        .insert_result("Identity", true, 12, now - 60)
+        .await;
+    // An active incident naming two PUBLIC components that both measure operational.
+    state
+        .store
+        .insert_incident(&Incident {
+            id: "inc_pub".to_string(),
+            title: "Gateway flapping".to_string(),
+            status: "monitoring".to_string(),
+            severity: "minor".to_string(),
+            affected: "Gateway,Identity".to_string(),
+            body: "Watching recovery".to_string(),
+            created_at: now,
+            updated_at: now,
+            resolved_at: 0,
+        })
+        .await;
+    // An active incident naming ONLY the internal CA probe (never public surface).
+    state
+        .store
+        .insert_incident(&Incident {
+            id: "inc_int".to_string(),
+            title: "Authority backplane fault".to_string(),
+            status: "investigating".to_string(),
+            severity: "critical".to_string(),
+            affected: "CA".to_string(),
+            body: "Internal only".to_string(),
+            created_at: now,
+            updated_at: now,
+            resolved_at: 0,
+        })
+        .await;
+
+    let (_, body) = call(&state, get("/status")).await;
+    let html = text(&body);
+    assert!(
+        html.contains("Gateway flapping"),
+        "the public incident stays on the ledger"
+    );
+    assert!(
+        !html.contains("Authority backplane fault"),
+        "internal-only incidents stay fail-closed off the public page"
+    );
+    assert!(
+        !html.contains(r#"class="status-hero__affected""#),
+        "affected derives from component states, so incident name lists cannot inflate it"
+    );
+}
+
+#[tokio::test]
+async fn affected_line_localizes_via_cookie_and_accept_language() {
+    let state = build_dev_state().await;
+    let now = now_secs();
+    state
+        .store
+        .insert_result("Gateway", false, 0, now - 60)
+        .await;
+    state
+        .store
+        .insert_result("Identity", true, 12, now - 60)
+        .await;
+
+    // Default: English.
+    let (_, body) = call(&state, get("/status")).await;
+    assert!(text(&body).contains("1 of 2 components affected"));
+
+    // The estate-wide `__Secure-lang` cookie steers the locale.
+    let zh = Request::builder()
+        .uri("/status")
+        .header(header::COOKIE, "__Secure-lang=zh")
+        .body(Body::empty())
+        .unwrap();
+    let (_, body) = call(&state, zh).await;
+    assert!(text(&body).contains("2 个组件中有 1 个受影响"));
+
+    // Accept-Language negotiation still works without a cookie.
+    let ja = Request::builder()
+        .uri("/status")
+        .header(header::ACCEPT_LANGUAGE, "ja-JP,ja;q=0.9,en;q=0.3")
+        .body(Body::empty())
+        .unwrap();
+    let (_, body) = call(&state, ja).await;
+    assert!(text(&body).contains("2 個中 1 個のコンポーネントが影響を受けています"));
+
+    // The retired `?locale` query parameter is inert: resolution stays cookie/header-only.
+    let (status, body) = call(&state, get("/status?locale=zh")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        text(&body).contains("1 of 2 components affected"),
+        "query strings never pick the locale"
+    );
+}
+
+#[tokio::test]
+async fn active_sits_before_maintenance_before_components_in_the_ia() {
+    let state = build_dev_state().await;
+    let now = now_secs();
+    state
+        .store
+        .insert_result("Gateway", true, 10, now - 60)
+        .await;
+    state
+        .store
+        .insert_incident(&Incident {
+            id: "inc_ia".to_string(),
+            title: "Elevated error rate".to_string(),
+            status: "investigating".to_string(),
+            severity: "major".to_string(),
+            affected: "Gateway".to_string(),
+            body: "Tracing the spike".to_string(),
+            created_at: now,
+            updated_at: now,
+            resolved_at: 0,
+        })
+        .await;
+    state
+        .store
+        .insert_maintenance(&Maintenance {
+            id: "mw_ia".to_string(),
+            title: "Scheduled upgrade".to_string(),
+            body: "Brief restarts expected".to_string(),
+            starts_at: now + 3_600,
+            ends_at: now + 7_200,
+            affected: "Gateway".to_string(),
+        })
+        .await;
+
+    let (status, body) = call(&state, get("/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = text(&body);
+
+    let hero = html.find(r#"<section class="status-hero"#).expect("hero");
+    let snapshot = html
+        .find(r#"<section class="bc-snapshot""#)
+        .expect("snapshot strip");
+    let active = html
+        .find(r#"<h2 class="section-title">Active incidents</h2>"#)
+        .expect("active ledger");
+    let maintenance = html
+        .find(r#"<h2 class="section-title">Maintenance</h2>"#)
+        .expect("maintenance section");
+    let components = html
+        .find(r#"<section class="card status-components""#)
+        .expect("components card");
+    let history = html
+        .find(r#"<section class="status-history""#)
+        .expect("history section");
+    assert!(hero < snapshot, "hero leads");
+    assert!(snapshot < active, "snapshot precedes the active ledger");
+    assert!(active < maintenance, "active incidents precede maintenance");
+    assert!(maintenance < components, "maintenance precedes components");
+    assert!(components < history, "history closes the region");
+    // The infra slot between components and history is covered by
+    // `infra_block_renders_between_components_and_history` (no vitals poller runs here).
+}
+
+#[tokio::test]
+async fn lang_switch_marks_only_the_active_locale_for_assistive_tech() {
+    let state = build_dev_state().await;
+    let (status, body) = call(&state, get("/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = text(&body);
+
+    assert!(
+        html.contains(
+            r#"<a class="langswitch__opt is-active" href="/_gw/lang?to=en" aria-current="true">"#
+        ),
+        "the active EN option is announced via aria-current"
+    );
+    assert!(
+        html.contains(r#"<nav class="bc-lang" aria-label="Language">"#),
+        "the EN switch keeps its English group label"
+    );
+    assert!(
+        !html.contains(r#"to=zh" aria-current"#),
+        "inactive zh option stays unmarked"
+    );
+    assert!(
+        !html.contains(r#"to=ja" aria-current"#),
+        "inactive ja option stays unmarked"
+    );
+}
+
+/// The publication contrast floor ships in the served CSS: every state-ink override is
+/// scoped behind the public profile attribute (the operator desk keeps canonical Odyssey
+/// ink), each color-mix deepening keeps a plain-token fallback line ahead of it, the
+/// in-text RSS link gets an always-on underline, and the whole section sits inside the
+/// publication layer ahead of the operator desk layer.
+#[tokio::test]
+async fn service_css_scopes_the_contrast_floor_to_the_public_profile() {
+    let state = build_dev_state().await;
+    let (status, body) = call(&state, get("/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = text(&body);
+
+    for selector in [
+        r#"html[data-ody-profile="public"] .page-console .status-live .pill-ok"#,
+        r#"html[data-ody-profile="public"] .page-console .crow__state--ok"#,
+        r#"html[data-ody-profile="public"] .page-console .status-live .pill-warn"#,
+        r#"html[data-ody-profile="public"] .page-console .crow__state--warn"#,
+        r#"html[data-ody-profile="public"] .page-console .status-hero--warn .status-hero__affected"#,
+        r#"html[data-ody-profile="public"] .page-console .status-live .pill-info"#,
+        r#"html[data-ody-profile="public"] .page-console .crow__state--info { color: var(--accent-ink); }"#,
+        r#"html[data-ody-profile="public"] .page-console .status-hero--down .status-hero__affected"#,
+        r#"html[data-ody-profile="public"] .page-console .status-history .sub a"#,
+    ] {
+        assert!(
+            html.contains(selector),
+            "served CSS keeps the public-scoped rule: {selector}"
+        );
+    }
+
+    // Progressive enhancement: a plain-token fallback precedes each color-mix deepening.
+    for pair in [
+        "  color: var(--ok-ink);\n  color: color-mix(in srgb, var(--ok-ink) 80%, var(--ink));",
+        "  color: var(--warn-ink);\n  color: color-mix(in srgb, var(--warn-ink) 80%, var(--ink));",
+        "  color: var(--info-ink);\n  color: color-mix(in srgb, var(--info-ink) 80%, var(--ink));",
+    ] {
+        assert!(
+            html.contains(pair),
+            "fallback declaration precedes color-mix: {pair}"
+        );
+    }
+
+    // link-in-text-block: the in-text RSS link no longer relies on color alone.
+    assert!(
+        html.contains("  text-decoration: underline;\n  text-underline-offset: 2px;"),
+        "in-text RSS link keeps an always-on underline"
+    );
+
+    // The floor lives inside the publication layer, ahead of the operator desk layer.
+    let publication = html
+        .find("Public status · Beacon publication layer")
+        .expect("publication marker");
+    let floor = html
+        .find("Publication contrast floor")
+        .expect("contrast floor comment");
+    let desk = html.find("Operator desk layer").expect("desk marker");
+    assert!(
+        publication < floor && floor < desk,
+        "contrast floor sits inside the publication layer, before the desk layer"
     );
 }

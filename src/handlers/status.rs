@@ -2,8 +2,9 @@
 //!
 //! Both are unauthenticated by design (placed behind a Sluice `auth=public` route). The
 //! page mirrors the Steadholme publication identity: app-bar, factual overall state, an
-//! incident-first ledger with expandable update timelines, native category disclosures,
-//! compact component rows with rolling uptime + a read-model-declared evidence window, and a
+//! operational snapshot strip, the active-incident ledger with expandable update timelines,
+//! scheduled maintenance, native category disclosures over compact component rows with rolling
+//! uptime + a read-model-declared evidence window, infra vitals when available, and a
 //! "Past incidents" section (last 14 days, grouped by day).
 
 use axum::extract::State;
@@ -32,7 +33,8 @@ const STATUS_LIVE_SELECTOR: &str = "#status-live";
 /// An Odyssey Wire request (`X-Wire: 1`) receives only the shared live region. A normal request,
 /// including a no-JavaScript activation of the refresh link, always receives the complete SSR
 /// document. The snapshot is explicitly non-cacheable: it varies by representation, locale, and
-/// theme while also carrying live operational data.
+/// theme while also carrying live operational data. Locale comes from the estate-wide
+/// `__Secure-lang` cookie / `Accept-Language` chain only — never from query parameters.
 pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let now = now_secs();
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
@@ -97,11 +99,18 @@ fn is_wire_request(headers: &HeaderMap) -> bool {
 }
 
 fn render_lang_switch(loc: odyssey::Locale) -> String {
-    let mut out = String::from(r#"<nav class="bc-lang" aria-label="Language">"#);
+    let mut out = format!(
+        r#"<nav class="bc-lang" aria-label="{}">"#,
+        esc(i18n::t(loc, "status.lang_label"))
+    );
     for l in odyssey::Locale::all() {
-        let active = if l == loc { " is-active" } else { "" };
+        let (active, current) = if l == loc {
+            (" is-active", r#" aria-current="true""#)
+        } else {
+            ("", "")
+        };
         out.push_str(&format!(
-            r#"<a class="langswitch__opt{active}" href="/_gw/lang?to={code}">{name}</a>"#,
+            r#"<a class="langswitch__opt{active}" href="/_gw/lang?to={code}"{current}>{name}</a>"#,
             code = l.code(),
             name = esc(odyssey::t(
                 l,
@@ -146,11 +155,19 @@ fn fmt_countdown_l(loc: odyssey::Locale, secs_until: i64) -> String {
     let hours = (secs_until % 86_400) / 3_600;
     let mins = (secs_until % 3_600) / 60;
     if days > 0 {
-        format!("{days}d {hours}h")
+        i18n::tf(
+            loc,
+            "time.duration.dh",
+            &[("d", &days.to_string()), ("h", &hours.to_string())],
+        )
     } else if hours > 0 {
-        format!("{hours}h {mins}m")
+        i18n::tf(
+            loc,
+            "time.duration.hm",
+            &[("h", &hours.to_string()), ("m", &mins.to_string())],
+        )
     } else if mins > 0 {
-        format!("{mins}m")
+        i18n::tf(loc, "time.duration.m", &[("m", &mins.to_string())])
     } else {
         i18n::t(loc, "time.under_minute").to_string()
     }
@@ -189,10 +206,10 @@ fn incident_status_label_l(loc: odyssey::Locale, status: &str) -> String {
         return crate::handlers::incident_status_label(status);
     }
     match status {
-        "investigating" => "Investigating".to_string(),
-        "identified" => "Identified".to_string(),
-        "monitoring" => "Monitoring".to_string(),
-        "resolved" => "Resolved".to_string(),
+        "investigating" => i18n::t(loc, "status.incident.investigating").to_string(),
+        "identified" => i18n::t(loc, "status.incident.identified").to_string(),
+        "monitoring" => i18n::t(loc, "status.incident.monitoring").to_string(),
+        "resolved" => i18n::t(loc, "status.incident.resolved").to_string(),
         other => other.to_string(),
     }
 }
@@ -309,13 +326,13 @@ fn render_status_live(view: &StatusView, now: i64, loc: odyssey::Locale) -> Stri
     format!(
         r#"<div id="{id}" class="status-live" role="region" aria-label="{label}">
 {banner}
-{active}
 {snapshot}
+{active}
+{maintenance}
 <section class="card status-components">
   <div class="card__head card__head--split"><h2>{components_title}</h2>{component_count}</div>
   <div class="card__body">{components}</div>
 </section>
-{maintenance}
 {infra}
 <section class="status-history">
   <h2 class="section-title">{past_title}</h2>
@@ -330,7 +347,7 @@ fn render_status_live(view: &StatusView, now: i64, loc: odyssey::Locale) -> Stri
         active = render_active_incidents(view, now, loc),
         maintenance = render_maintenances(view, now, loc),
         components_title = esc(i18n::t(loc, "status.components")),
-        component_count = render_component_count(view),
+        component_count = render_component_count(view, loc),
         components = render_components(view, now, loc),
         infra = render_infra(loc, view.infra.as_ref(), now),
         past_title = esc(i18n::t(loc, "status.past")),
@@ -406,6 +423,15 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
             "status.hero.ok.sub",
         ),
     };
+    // Affected is derived from the projected component states themselves — never from incident
+    // affected-name lists, which may name internal checks or lag behind the probes. A
+    // maintenance-masked component counts as affected: it is not operational right now.
+    let affected_total = view.components.len();
+    let affected_count = view
+        .components
+        .iter()
+        .filter(|c| c.status != "operational")
+        .count();
     let uptime = checked_uptime_avg(view.components.iter())
         .map(|avg| {
             let days = view.history_days.to_string();
@@ -418,6 +444,21 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
             )
         })
         .unwrap_or_default();
+    let affected = if affected_count > 0 {
+        format!(
+            r#"<span class="status-hero__affected">{}</span>"#,
+            esc(&i18n::tf(
+                loc,
+                "status.hero.affected",
+                &[
+                    ("affected", &affected_count.to_string()),
+                    ("total", &affected_total.to_string())
+                ]
+            ))
+        )
+    } else {
+        String::new()
+    };
     format!(
         r#"<section class="status-hero {cls}">
   <span class="status-hero__mark status-hero__mark--{state}" aria-hidden="true"></span>
@@ -427,6 +468,7 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
   </div>
   <div class="status-hero__meta">
     {uptime}
+    {affected}
     <span class="status-hero__updated">{updated}</span>
   </div>
 </section>"#,
@@ -441,15 +483,24 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     )
 }
 
-fn render_component_count(view: &StatusView) -> String {
+fn render_component_count(view: &StatusView, loc: odyssey::Locale) -> String {
     if view.components.is_empty() {
-        String::new()
-    } else {
-        format!(
+        return String::new();
+    }
+    if loc == odyssey::Locale::En {
+        return format!(
             r#"<span class="card__head-meta">{} monitored</span>"#,
             view.components.len()
-        )
+        );
     }
+    format!(
+        r#"<span class="card__head-meta">{}</span>"#,
+        esc(&i18n::tf(
+            loc,
+            "status.components.monitored",
+            &[("n", &view.components.len().to_string())]
+        ))
+    )
 }
 
 /// The Components body. With no groups configured this renders a flat list of compact rows.
@@ -479,26 +530,20 @@ fn render_components(view: &StatusView, now: i64, loc: odyssey::Locale) -> Strin
         return rows;
     }
 
-    // Grouped: one collapsible section per group (ordered by the view), then ungrouped last.
-    let mut out = String::new();
+    // Materialize non-empty sections in view order and determine each rollup; exactly one
+    // section starts open (see `section_open_index`).
+    let mut sections = Vec::new();
     for g in &view.groups {
         let members: Vec<&ComponentView> = view
             .components
             .iter()
             .filter(|c| c.group_id.as_deref() == Some(g.id.as_str()))
             .collect();
-        if members.is_empty() {
-            continue;
+        if !members.is_empty() {
+            let statuses: Vec<&str> = members.iter().map(|c| c.status).collect();
+            let rollup = group_rollup(&statuses);
+            sections.push((g.name.as_str(), members, rollup));
         }
-        out.push_str(&render_group_section(
-            &g.name,
-            &members,
-            g.status,
-            now,
-            loc,
-            &incident_by_day,
-            team_first_day,
-        ));
     }
 
     // Ungrouped components (group_id None, or pointing at a group that no longer exists).
@@ -511,10 +556,25 @@ fn render_components(view: &StatusView, now: i64, loc: odyssey::Locale) -> Strin
         .collect();
     if !ungrouped.is_empty() {
         let statuses: Vec<&str> = ungrouped.iter().map(|c| c.status).collect();
+        let other_label = if loc == odyssey::Locale::En {
+            "Other"
+        } else {
+            i18n::t(loc, "status.group.other")
+        };
+        sections.push((other_label, ungrouped, group_rollup(&statuses)));
+    }
+
+    let rollups: Vec<&str> = sections.iter().map(|(_, _, rollup)| *rollup).collect();
+    let open_idx = section_open_index(&rollups);
+
+    let mut out = String::new();
+    for (idx, (name, members, rollup)) in sections.into_iter().enumerate() {
+        let is_open = open_idx == Some(idx);
         out.push_str(&render_group_section(
-            "Other",
-            &ungrouped,
-            group_rollup(&statuses),
+            name,
+            &members,
+            rollup,
+            is_open,
             now,
             loc,
             &incident_by_day,
@@ -525,16 +585,48 @@ fn render_components(view: &StatusView, now: i64, loc: odyssey::Locale) -> Strin
     out
 }
 
+/// Severity rank used to pick which category section starts expanded. Higher is worse.
+fn section_rank(rollup: &str) -> u8 {
+    match rollup {
+        "down" => 3,
+        "degraded" => 2,
+        "maintenance" => 1,
+        _ => 0,
+    }
+}
+
+/// Index of the single category section that starts expanded: the worst rollup wins, and rank
+/// ties keep the earliest section (strict-max, first-wins). An all-operational page still
+/// focuses the first section, so a grouped page always opens exactly one fold. `None` only
+/// when there are no sections at all (empty and flat layouts render no folds).
+fn section_open_index(rollups: &[&str]) -> Option<usize> {
+    if rollups.is_empty() {
+        return None;
+    }
+    let mut open_idx = 0;
+    let mut best_rank = 0;
+    for (idx, rollup) in rollups.iter().enumerate() {
+        let rank = section_rank(rollup);
+        if rank > best_rank {
+            best_rank = rank;
+            open_idx = idx;
+        }
+    }
+    Some(open_idx)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_group_section(
     name: &str,
     members: &[&ComponentView],
     rollup: &str,
+    is_open: bool,
     now: i64,
     loc: odyssey::Locale,
     incident_by_day: &std::collections::HashMap<String, String>,
     team_first_day: Option<i64>,
 ) -> String {
-    let open = if rollup != "operational" { " open" } else { "" };
+    let open = if is_open { " open" } else { "" };
     let uptime = checked_uptime_avg(members.iter().copied())
         .map(|avg| {
             let days = members
@@ -548,18 +640,27 @@ fn render_group_section(
             )
         })
         .unwrap_or_default();
+    let count_label = if loc == odyssey::Locale::En {
+        format!("{} components", members.len())
+    } else {
+        i18n::tf(
+            loc,
+            "status.group.count",
+            &[("n", &members.len().to_string())],
+        )
+    };
     let mut out = format!(
         r#"<details class="cgroup"{open}>
   <summary class="cgroup__head">
     <span class="cgroup__chev" aria-hidden="true"></span>
     <h3 class="cgroup__name">{name}</h3>
-    <span class="cgroup__count">{count} components</span>
+    <span class="cgroup__count">{count}</span>
     {uptime}
     {pill}
   </summary>
   <div class="cgroup__body">"#,
         name = esc(name),
-        count = members.len(),
+        count = esc(&count_label),
         pill = status_pill_l(loc, rollup),
     );
     for c in members {
@@ -596,15 +697,20 @@ fn render_component_row(
     let first_day = first_data_idx
         .map(|idx| day_bucket(now) - c.days.len().saturating_sub(1) as i64 + idx as i64);
     let monitoring_since = first_day.map(|day| fmt_date_l(loc, day * DAY_SECS));
+    let no_data_text = match &monitoring_since {
+        Some(date) if loc == odyssey::Locale::En => {
+            format!("no data — monitoring began {date}")
+        }
+        Some(date) => i18n::tf(loc, "status.bar.no_data_since", &[("date", date)]),
+        None if loc == odyssey::Locale::En => "no data".to_string(),
+        None => i18n::t(loc, "status.bar.no_data").to_string(),
+    };
 
     let mut bars = String::new();
     for d in &c.days {
         let data_uptime = match d.uptime {
             Some(pct) => format!("{pct:.2}%"),
-            None => match &monitoring_since {
-                Some(date) => format!("no data — monitoring began {date}"),
-                None => "no data".to_string(),
-            },
+            None => no_data_text.clone(),
         };
         let inc_attr = if matches!(d.status, "warn" | "down") {
             incident_by_day
@@ -625,11 +731,22 @@ fn render_component_row(
     let since = if c.days.first().is_some_and(|d| d.uptime.is_none()) {
         match (first_day, monitoring_since) {
             (Some(day), Some(_)) if team_first_day == Some(day) => String::new(),
-            (_, Some(date)) => format!(
-                r#"<span class="crow__since">monitoring since {}</span>"#,
-                esc(&date)
-            ),
-            _ => r#"<span class="crow__since">awaiting first check</span>"#.to_string(),
+            (_, Some(date)) => {
+                let text = if loc == odyssey::Locale::En {
+                    format!("monitoring since {date}")
+                } else {
+                    i18n::tf(loc, "status.row.monitoring_since", &[("date", &date)])
+                };
+                format!(r#"<span class="crow__since">{}</span>"#, esc(&text))
+            }
+            _ => {
+                let text = if loc == odyssey::Locale::En {
+                    "awaiting first check"
+                } else {
+                    i18n::t(loc, "status.row.awaiting_first_check")
+                };
+                format!(r#"<span class="crow__since">{}</span>"#, esc(text))
+            }
         }
     } else {
         String::new()
@@ -646,8 +763,10 @@ fn render_component_row(
             "status.uptime.component_title",
             &[("days", &c.days.len().to_string())],
         )
-    } else {
+    } else if loc == odyssey::Locale::En {
         "awaiting first check".to_string()
+    } else {
+        i18n::t(loc, "status.row.awaiting_first_check").to_string()
     };
     let pct = if c.last_checked.is_some() {
         format!("{:.2}%", c.uptime_90d)
@@ -657,20 +776,29 @@ fn render_component_row(
     let state = state_mod(c.status);
     let state_label = status_label_l(loc, c.status);
     let evidence_label = format!("{} · {} · {} · {}", c.name, state_label, pct, pct_title);
+    let latency_title = if loc == odyssey::Locale::En {
+        format!("24h average · latest {latest_latency}")
+    } else {
+        i18n::tf(
+            loc,
+            "status.row.latency_title",
+            &[("latest", &latest_latency)],
+        )
+    };
     format!(
         r#"<div class="crow">
   <span class="crow__id">
     <span class="crow__dot crow__dot--{state}" aria-hidden="true"></span>
     <span class="crow__name" title="{name}">{name}</span>
   </span>
-  <span class="bc-lat">{spark}<span class="crow__lat" title="24h average · latest {latest_latency}">{latency}</span></span>
+  <span class="bc-lat">{spark}<span class="crow__lat" title="{latency_title}">{latency}</span></span>
   <div class="crow__track" role="img" aria-label="{evidence_label}"><div class="bars" aria-hidden="true">{bars}</div></div>
   <span class="crow__pct" title="{pct_title}">{pct}</span>
   <span class="crow__state crow__state--{state}">{label}</span>
   {since}
 </div>"#,
         name = esc(&c.name),
-        latest_latency = esc(&latest_latency),
+        latency_title = esc(&latency_title),
         latency = esc(&latency),
         spark = spark,
         bars = bars,
@@ -921,14 +1049,29 @@ fn render_timeline(
             body = esc(&u.body),
         ));
     }
+    let reported_label = if loc == odyssey::Locale::En {
+        "reported"
+    } else {
+        i18n::t(loc, "status.incident.reported")
+    };
     items.push_str(&format!(
-        r#"<li class="timeline__item"><span class="pill pill-state">reported</span> <span class="timeline__time">{ago}</span><p class="timeline__body">{body}</p></li>"#,
+        r#"<li class="timeline__item"><span class="pill pill-state">{reported}</span> <span class="timeline__time">{ago}</span><p class="timeline__body">{body}</p></li>"#,
+        reported = esc(reported_label),
         ago = esc(&rel_time_l(loc, inc.created_at, now)),
         body = esc(&inc.body),
     ));
+    let summary = if loc == odyssey::Locale::En {
+        format!("Timeline ({})", updates.len() + 1)
+    } else {
+        i18n::tf(
+            loc,
+            "status.timeline",
+            &[("n", &(updates.len() + 1).to_string())],
+        )
+    };
     format!(
-        r#"<details class="timeline"><summary>Timeline ({n})</summary><ol>{items}</ol></details>"#,
-        n = updates.len() + 1,
+        r#"<details class="timeline"><summary>{summary}</summary><ol>{items}</ol></details>"#,
+        summary = esc(&summary),
     )
 }
 
@@ -969,12 +1112,23 @@ fn render_active_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) ->
             .first()
             .map(|u| u.body.as_str())
             .unwrap_or(inc.body.as_str());
+        let opened_ago = rel_time_l(loc, inc.created_at, now);
+        let updated_ago = rel_time_l(loc, inc.updated_at, now);
+        let time_line = if loc == odyssey::Locale::En {
+            format!("Opened {opened_ago} · Last update {updated_ago}")
+        } else {
+            i18n::tf(
+                loc,
+                "status.incident.opened_updated",
+                &[("opened", &opened_ago), ("updated", &updated_ago)],
+            )
+        };
         out.push_str(&format!(
             r#"<section class="card incident-card sev-{sev}"><div class="card__body"><article class="incident">
   <div class="incident__head"><h3 class="incident__title">{title}</h3><span class="incident__pills">{sev_pill}{status_pill}</span></div>
   {affected}
   <p class="incident__body">{latest}</p>
-  <div class="incident__time">Opened {opened} · Last update {updated}</div>
+  <div class="incident__time">{time_line}</div>
   {timeline}
 </article></div></section>"#,
             sev = esc(&inc.severity),
@@ -983,8 +1137,7 @@ fn render_active_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) ->
             status_pill = incident_status_pill_l(loc, &inc.status),
             affected = render_affected_l(loc, &inc.affected),
             latest = esc(latest),
-            opened = esc(&rel_time_l(loc, inc.created_at, now)),
-            updated = esc(&rel_time_l(loc, inc.updated_at, now)),
+            time_line = esc(&time_line),
             timeline = render_timeline(inc, &updates, now, loc),
         ));
     }
@@ -1004,20 +1157,36 @@ fn render_maintenances(view: &StatusView, now: i64, loc: odyssey::Locale) -> Str
         // Surface a prominent countdown: ongoing windows show time-to-end, upcoming ones
         // time-to-start (upcoming/ongoing windows are the only ones on the public surface).
         let (state_pill, countdown) = if maintenance_ongoing(m, now) {
+            let label = if loc == odyssey::Locale::En {
+                "in progress"
+            } else {
+                i18n::t(loc, "status.maint.in_progress")
+            };
+            let ends = fmt_countdown_l(loc, m.ends_at - now);
+            let cd = if loc == odyssey::Locale::En {
+                format!("ends in {ends}")
+            } else {
+                i18n::tf(loc, "status.maint.ends_in", &[("t", &ends)])
+            };
             (
-                r#"<span class="pill pill-info">in progress</span>"#,
-                format!(
-                    r#"<span class="countdown">ends in {}</span>"#,
-                    esc(&fmt_countdown_l(loc, m.ends_at - now))
-                ),
+                format!(r#"<span class="pill pill-info">{}</span>"#, esc(label)),
+                format!(r#"<span class="countdown">{}</span>"#, esc(&cd)),
             )
         } else {
+            let label = if loc == odyssey::Locale::En {
+                "scheduled"
+            } else {
+                i18n::t(loc, "status.maint.scheduled")
+            };
+            let starts = fmt_countdown_l(loc, m.starts_at - now);
+            let cd = if loc == odyssey::Locale::En {
+                format!("starts in {starts}")
+            } else {
+                i18n::tf(loc, "status.maint.starts_in", &[("t", &starts)])
+            };
             (
-                r#"<span class="pill pill-state">scheduled</span>"#,
-                format!(
-                    r#"<span class="countdown">starts in {}</span>"#,
-                    esc(&fmt_countdown_l(loc, m.starts_at - now))
-                ),
+                format!(r#"<span class="pill pill-state">{}</span>"#, esc(label)),
+                format!(r#"<span class="countdown">{}</span>"#, esc(&cd)),
             )
         };
         out.push_str(&format!(
@@ -1062,20 +1231,32 @@ fn render_past_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> S
         ));
         for inc in incidents {
             let resolved = inc.status == "resolved";
+            let opened_ago = rel_time_l(loc, inc.created_at, now);
             let mut when = if resolved && inc.resolved_at > 0 {
-                format!(
-                    "Opened {} · Resolved {}",
-                    rel_time_l(loc, inc.created_at, now),
-                    rel_time_l(loc, inc.resolved_at, now)
-                )
+                let resolved_ago = rel_time_l(loc, inc.resolved_at, now);
+                if loc == odyssey::Locale::En {
+                    format!("Opened {opened_ago} · Resolved {resolved_ago}")
+                } else {
+                    i18n::tf(
+                        loc,
+                        "status.incident.opened_resolved",
+                        &[("opened", &opened_ago), ("resolved", &resolved_ago)],
+                    )
+                }
+            } else if loc == odyssey::Locale::En {
+                format!("Opened {opened_ago}")
             } else {
-                format!("Opened {}", rel_time_l(loc, inc.created_at, now))
+                i18n::tf(loc, "status.incident.opened_at", &[("ago", &opened_ago)])
             };
             if resolved && inc.resolved_at > 0 {
-                when.push_str(&format!(
-                    " · lasted {}",
-                    fmt_countdown_l(loc, inc.resolved_at - inc.created_at)
-                ));
+                let lasted = fmt_countdown_l(loc, inc.resolved_at - inc.created_at);
+                let lasted_text = if loc == odyssey::Locale::En {
+                    format!("· lasted {lasted}")
+                } else {
+                    i18n::tf(loc, "status.incident.lasted", &[("duration", &lasted)])
+                };
+                when.push(' ');
+                when.push_str(&lasted_text);
             }
             out.push_str(&format!(
                 r#"<article class="incident{muted}">
@@ -1100,4 +1281,187 @@ fn render_past_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> S
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ComponentView, DayStat, GroupView, StatusView};
+    use crate::vitals::InfraPublic;
+    use odyssey::Locale;
+
+    /// Synthetic trailing "Other" section: ungrouped components when groups exist.
+    #[test]
+    fn render_status_live_with_trailing_other_section() {
+        let view = StatusView {
+            overall: "operational",
+            updated_at: 1700000000,
+            history_days: 30,
+            components: vec![
+                ComponentView {
+                    name: "Gateway".to_string(),
+                    kind: "http".to_string(),
+                    status: "operational",
+                    group_id: Some("g_core".to_string()),
+                    uptime_24h: 100.0,
+                    uptime_7d: 99.98,
+                    uptime_90d: 99.95,
+                    latency_ms: Some(42),
+                    latency_avg_ms: Some(38),
+                    latency_points: vec![],
+                    last_checked: Some(1700000000),
+                    days: vec![DayStat {
+                        date: "2023-11-14".to_string(),
+                        status: "ok",
+                        uptime: Some(100.0),
+                    }],
+                },
+                ComponentView {
+                    name: "Orphan".to_string(),
+                    kind: "http".to_string(),
+                    status: "operational",
+                    group_id: None,
+                    uptime_24h: 99.90,
+                    uptime_7d: 99.85,
+                    uptime_90d: 99.80,
+                    latency_ms: Some(55),
+                    latency_avg_ms: Some(50),
+                    latency_points: vec![],
+                    last_checked: Some(1700000000),
+                    days: vec![DayStat {
+                        date: "2023-11-14".to_string(),
+                        status: "ok",
+                        uptime: Some(100.0),
+                    }],
+                },
+            ],
+            groups: vec![GroupView {
+                id: "g_core".to_string(),
+                name: "Core".to_string(),
+                position: 0,
+                status: "operational",
+            }],
+            incidents: vec![],
+            updates: vec![],
+            maintenances: vec![],
+            infra: None,
+        };
+
+        let html = render_status_live(&view, 1700000000, Locale::En);
+
+        // Must render exactly two sections: the named group "Core" and the trailing "Other".
+        assert_eq!(
+            html.matches(r#"<details class="cgroup""#).count(),
+            2,
+            "one named group plus one trailing Other section"
+        );
+        assert!(
+            html.contains(r#"class="cgroup__name">Core"#),
+            "Core group present"
+        );
+        assert!(
+            html.contains(r#"class="cgroup__name">Other"#),
+            "trailing Other section present"
+        );
+        assert!(html.contains(r#"title="Gateway""#));
+        assert!(html.contains(r#"title="Orphan""#));
+    }
+
+    /// The trailing "Other" section label and the member counts localize with the page
+    /// (the catalog path always assigns a group id, so this is only reachable synthetically).
+    #[test]
+    fn render_status_live_localizes_the_trailing_other_section() {
+        let component = |name: &str, group_id: Option<&str>| ComponentView {
+            name: name.to_string(),
+            kind: "http".to_string(),
+            status: "operational",
+            group_id: group_id.map(str::to_string),
+            uptime_24h: 100.0,
+            uptime_7d: 99.98,
+            uptime_90d: 99.95,
+            latency_ms: Some(42),
+            latency_avg_ms: Some(38),
+            latency_points: vec![],
+            last_checked: Some(1700000000),
+            days: vec![DayStat {
+                date: "2023-11-14".to_string(),
+                status: "ok",
+                uptime: Some(100.0),
+            }],
+        };
+        let view = StatusView {
+            overall: "operational",
+            updated_at: 1700000000,
+            history_days: 30,
+            components: vec![
+                component("Gateway", Some("g_core")),
+                component("Orphan", None),
+            ],
+            groups: vec![GroupView {
+                id: "g_core".to_string(),
+                name: "Core".to_string(),
+                position: 0,
+                status: "operational",
+            }],
+            incidents: vec![],
+            updates: vec![],
+            maintenances: vec![],
+            infra: None,
+        };
+
+        let zh = render_status_live(&view, 1700000000, Locale::Zh);
+        assert!(
+            zh.contains(r#"class="cgroup__name">其他"#),
+            "zh Other label"
+        );
+        assert!(
+            zh.contains(r#"<span class="cgroup__count">1 个组件</span>"#),
+            "zh member count"
+        );
+        assert!(
+            !zh.contains(r#"class="cgroup__name">Other"#),
+            "no English Other on the zh page"
+        );
+
+        let ja = render_status_live(&view, 1700000000, Locale::Ja);
+        assert!(
+            ja.contains(r#"class="cgroup__name">その他"#),
+            "ja Other label"
+        );
+        assert!(
+            ja.contains(r#"<span class="cgroup__count">コンポーネント 1 件</span>"#),
+            "ja member count"
+        );
+    }
+
+    /// Synthetic infra block without a live vitals poller.
+    #[test]
+    fn render_status_live_with_synthetic_infra() {
+        let view = StatusView {
+            overall: "operational",
+            updated_at: 1700000000,
+            history_days: 30,
+            components: vec![],
+            groups: vec![],
+            incidents: vec![],
+            updates: vec![],
+            maintenances: vec![],
+            infra: Some(InfraPublic {
+                overall: "ok",
+                bands: vec![],
+                trend: vec!["ok"; 24],
+            }),
+        };
+
+        let html = render_status_live(&view, 1700000000, Locale::En);
+
+        assert!(
+            html.contains(r#"class="card bc-infra""#),
+            "infra section renders when present"
+        );
+        assert!(
+            html.contains(r#"class="bc-infra__trend""#),
+            "24-hour trend present"
+        );
+    }
 }

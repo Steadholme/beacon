@@ -391,6 +391,10 @@ html[data-ody-profile="public"] {
 .page-console .themeswitch {
   border-radius: 0; box-shadow: none;
 }
+/* Language and theme switch targets meet the 44px height guideline; widths stay intrinsic
+   so the top bar still fits a 320px viewport. */
+html[data-ody-profile="public"] .page-console .bc-lang .langswitch__opt,
+html[data-ody-profile="public"] .page-console .themeswitch__opt { height: auto; min-height: 44px; }
 .page-console .console { padding-top: 42px; }
 .page-console .statushead {
   position: relative; align-items: flex-end; margin-bottom: 26px; padding-bottom: 20px;
@@ -447,6 +451,9 @@ html[data-ody-profile="public"] {
   color: var(--ink-3); font-family: var(--mono); font-size: 11.5px;
 }
 .page-console .status-hero__uptime strong { color: var(--ink); }
+.page-console .status-hero__affected { font-family: var(--mono); font-weight: 700; color: var(--ink); }
+.page-console .status-hero--warn .status-hero__affected { color: var(--warn); }
+.page-console .status-hero--down .status-hero__affected { color: var(--down); }
 
 /* Evidence strip and incident ledger. */
 .page-console .bc-snapshot {
@@ -467,6 +474,12 @@ html[data-ody-profile="public"] {
 .page-console .incident-card:hover { border-color: var(--beacon-rule-soft); box-shadow: none; }
 .page-console .incident-card + .incident-card { margin-top: 0; }
 .page-console .incident-card .card__body { padding: 0; }
+/* The current active event: a quiet left rule with a step of indent marks the live entries.
+   Maintenance cards and past-incident articles stay flush with the ledger. */
+.page-console .status-live > .incident-card:not(.sev-maintenance) {
+  border-left: 2px solid var(--beacon-rule);
+  padding-left: 16px;
+}
 .page-console .incident {
   margin: 0; padding: 16px 0; border: 0; border-radius: 0;
   background: transparent; box-shadow: none;
@@ -475,8 +488,9 @@ html[data-ody-profile="public"] {
 .page-console .incident__title { font-family: var(--beacon-display); font-size: 16px; }
 .page-console .timeline summary { min-height: 44px; display: inline-flex; align-items: center; }
 
-/* Category disclosure is the primary browsing model. Healthy groups stay folded; the renderer
-   adds open only when the rollup is degraded, down, or under maintenance. */
+/* Category disclosure is the primary browsing model. The renderer always opens exactly one
+   fold: the worst rollup wins (down > degraded > maintenance), rank ties keep the earliest
+   section, and an all-operational page still opens the first category. */
 .page-console .status-components,
 .page-console .bc-infra,
 .page-console #subscribe {
@@ -515,11 +529,18 @@ html[data-ody-profile="public"] {
   border-color: var(--ink-2);
 }
 .page-console .cgroup__name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: var(--beacon-display); font-size: 16px; font-weight: 600; letter-spacing: -.01em;
 }
 .page-console .cgroup__count { font-family: var(--mono); font-size: 11px; }
 .page-console .cgroup__uptime { margin-left: 0; font-size: 12px; }
 .page-console .cgroup__body { padding: 0 0 18px 30px; }
+/* The one open fold is the page's focus: an accent rule replaces part of the body indent
+   (2px rule + 28px = the closed body's 30px), so member rows keep their column alignment. */
+.page-console .cgroup[open] > .cgroup__body {
+  border-left: 2px solid var(--accent);
+  padding-left: 28px;
+}
 .page-console .status-live .pill { display: inline-flex; align-items: center; gap: 6px; }
 .page-console .status-live .pill::before {
   content: ""; width: 7px; height: 7px; flex: none; border: 1.5px solid currentColor;
@@ -562,6 +583,7 @@ html[data-ody-profile="public"] {
 
 @media (min-width: 721px) and (max-width: 920px) {
   .page-console .cgroup__body { padding-left: 24px; }
+  .page-console .cgroup[open] > .cgroup__body { padding-left: 22px; }
   .page-console .crow {
     grid-template-columns: minmax(150px, 170px) 88px minmax(120px, 1fr) 60px 80px;
     gap: 8px;
@@ -590,6 +612,7 @@ html[data-ody-profile="public"] {
   .page-console .cgroup__uptime { grid-column: 3; grid-row: 2; }
   .page-console .cgroup__head > .pill { grid-column: 3; grid-row: 1; }
   .page-console .cgroup__body { padding-left: 28px; }
+  .page-console .cgroup[open] > .cgroup__body { padding-left: 26px; }
   .page-console .crow { grid-template-columns: minmax(0, 1fr) auto; }
   .page-console .crow__id { grid-column: 1; grid-row: 1; }
   .page-console .crow__state { grid-column: 2; grid-row: 1; }
@@ -605,6 +628,7 @@ html[data-ody-profile="public"] {
   .page-console .bc-snapshot__item { padding: 13px 10px; }
   .page-console .bc-snapshot__item:nth-child(odd) { padding-left: 0; }
   .page-console .cgroup__body { padding-left: 18px; }
+  .page-console .cgroup[open] > .cgroup__body { padding-left: 16px; }
   .page-console .cgroup__name { font-size: 15px; }
   .page-console .cgroup__head > .pill { padding-left: 7px; padding-right: 7px; }
 }
@@ -614,6 +638,35 @@ html[data-ody-profile="public"] {
   .page-console .cgroup__chev { transition: none; }
 }
 
+/* Publication contrast floor — status ink meets WCAG 1.4.3 (≥4.5:1) on both themes.
+   Public-profile scoped so the operator desk keeps the canonical Odyssey treatment.
+   The first declaration in each pair is a plain-token fallback for engines without
+   color-mix(); the mix deepens the state ink 20% toward the theme foreground. */
+html[data-ody-profile="public"] .page-console .status-live .pill-ok,
+html[data-ody-profile="public"] .page-console .crow__state--ok {
+  color: var(--ok-ink);
+  color: color-mix(in srgb, var(--ok-ink) 80%, var(--ink));
+}
+html[data-ody-profile="public"] .page-console .status-live .pill-warn,
+html[data-ody-profile="public"] .page-console .crow__state--warn,
+html[data-ody-profile="public"] .page-console .status-hero--warn .status-hero__affected {
+  color: var(--warn-ink);
+  color: color-mix(in srgb, var(--warn-ink) 80%, var(--ink));
+}
+html[data-ody-profile="public"] .page-console .status-live .pill-info {
+  color: var(--info-ink);
+  color: color-mix(in srgb, var(--info-ink) 80%, var(--ink));
+}
+html[data-ody-profile="public"] .page-console .crow__state--info { color: var(--accent-ink); }
+html[data-ody-profile="public"] .page-console .status-hero--down .status-hero__affected {
+  color: var(--down-ink);
+}
+/* The in-text RSS link relies on more than color (link-in-text-block). */
+html[data-ody-profile="public"] .page-console .status-history .sub a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 @media (forced-colors: active) {
   .page-console .skip-link,
   .page-console .status-hero,
@@ -621,7 +674,10 @@ html[data-ody-profile="public"] {
   .page-console .status-components,
   .page-console .bc-infra,
   .page-console #subscribe,
-  .page-console .status-history { border-color: CanvasText; }
+  .page-console .status-history,
+  .page-console .status-live > .incident-card:not(.sev-maintenance),
+  .page-console .cgroup[open] > .cgroup__body { border-color: CanvasText; }
+  .page-console .status-hero__affected { color: CanvasText; }
   .page-console .status-hero__mark,
   .page-console .crow__dot,
   .page-console .status-live .pill::before,
