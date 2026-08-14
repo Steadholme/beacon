@@ -1567,6 +1567,10 @@ async fn service_css_scopes_the_contrast_floor_to_the_public_profile() {
         r#"html[data-ody-profile="public"] .page-console .crow__state--info { color: var(--accent-ink); }"#,
         r#"html[data-ody-profile="public"] .page-console .status-hero--down .status-hero__affected"#,
         r#"html[data-ody-profile="public"] .page-console .status-history .sub a"#,
+        r#"html[data-ody-profile="public"] .page-console .bc-infra__band"#,
+        r#"html[data-ody-profile="public"] .page-console .bc-infra__band--elevated"#,
+        r#"html[data-ody-profile="public"] .page-console .bc-infra__band--high"#,
+        r#"html[data-ody-profile="public"] .page-console .bc-infra__band--unknown"#,
     ] {
         assert!(
             html.contains(selector),
@@ -1585,6 +1589,66 @@ async fn service_css_scopes_the_contrast_floor_to_the_public_profile() {
             "fallback declaration precedes color-mix: {pair}"
         );
     }
+
+    // Infrastructure meter bands follow the same fallback + color-mix pattern (base and elevated
+    // only; high uses plain down-ink, unknown uses plain ink-3).
+    assert!(
+        html.contains("html[data-ody-profile=\"public\"] .page-console .bc-infra__band {\n  color: var(--ok-ink);\n  color: color-mix(in srgb, var(--ok-ink) 80%, var(--ink));"),
+        "bc-infra__band base keeps ok-ink fallback then 80% color-mix"
+    );
+    assert!(
+        html.contains("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--elevated {\n  color: var(--warn-ink);\n  color: color-mix(in srgb, var(--warn-ink) 80%, var(--ink));"),
+        "bc-infra__band--elevated keeps warn-ink fallback then 80% color-mix"
+    );
+    assert!(
+        html.contains("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--high {\n  color: var(--down-ink);"),
+        "bc-infra__band--high uses plain down-ink"
+    );
+    assert!(
+        html.contains("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--unknown {\n  color: var(--ink-3);"),
+        "bc-infra__band--unknown uses plain ink-3"
+    );
+
+    // Ordering: the four bc-infra__band rules appear after the RSS link underline and before
+    // the @media (forced-colors: active) block.
+    let rss_underline = html
+        .find("html[data-ody-profile=\"public\"] .page-console .status-history .sub a {")
+        .expect("RSS underline rule");
+    let infra_base = html
+        .find("html[data-ody-profile=\"public\"] .page-console .bc-infra__band {")
+        .expect("bc-infra__band base rule");
+    let infra_elevated = html
+        .find("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--elevated {")
+        .expect("bc-infra__band--elevated rule");
+    let infra_high = html
+        .find("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--high {")
+        .expect("bc-infra__band--high rule");
+    let infra_unknown = html
+        .find("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--unknown {")
+        .expect("bc-infra__band--unknown rule");
+    let forced_colors = html
+        .find("@media (forced-colors: active) {")
+        .expect("forced-colors media query");
+    assert!(
+        rss_underline < infra_base,
+        "bc-infra__band base appears after RSS underline"
+    );
+    assert!(
+        infra_base < infra_elevated,
+        "bc-infra__band--elevated follows base"
+    );
+    assert!(
+        infra_elevated < infra_high,
+        "bc-infra__band--high follows elevated"
+    );
+    assert!(
+        infra_high < infra_unknown,
+        "bc-infra__band--unknown follows high"
+    );
+    assert!(
+        infra_unknown < forced_colors,
+        "all four bc-infra__band rules precede forced-colors block"
+    );
 
     // link-in-text-block: the in-text RSS link no longer relies on color alone.
     assert!(

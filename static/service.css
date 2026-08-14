@@ -666,6 +666,21 @@ html[data-ody-profile="public"] .page-console .status-history .sub a {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* Infrastructure meter bands follow the same contrast floor. */
+html[data-ody-profile="public"] .page-console .bc-infra__band {
+  color: var(--ok-ink);
+  color: color-mix(in srgb, var(--ok-ink) 80%, var(--ink));
+}
+html[data-ody-profile="public"] .page-console .bc-infra__band--elevated {
+  color: var(--warn-ink);
+  color: color-mix(in srgb, var(--warn-ink) 80%, var(--ink));
+}
+html[data-ody-profile="public"] .page-console .bc-infra__band--high {
+  color: var(--down-ink);
+}
+html[data-ody-profile="public"] .page-console .bc-infra__band--unknown {
+  color: var(--ink-3);
+}
 
 @media (forced-colors: active) {
   .page-console .skip-link,
