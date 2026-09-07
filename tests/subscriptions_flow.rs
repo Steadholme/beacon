@@ -98,7 +98,7 @@ async fn webhooks_default_off_and_enabled_mode_rejects_non_public_targets() {
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK);
     let html = text(&body);
-    assert!(html.contains("Subscribe to updates"));
+    assert!(html.contains(r#"<section class="channels" id="subscribe">"#));
     assert!(!html.contains(r#"action="/subscriptions""#));
     assert!(html.contains("RSS feed"));
     assert!(html.contains("JSON API"));

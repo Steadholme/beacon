@@ -8,6 +8,9 @@
 //! bucketing math is unit-testable in isolation.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -172,6 +175,82 @@ pub struct StatusView {
     pub updates: Vec<IncidentUpdate>,
     /// Upcoming + ongoing maintenance windows (past ones are not public surface).
     pub maintenances: Vec<Maintenance>,
+}
+
+type CachedPublicStatus = Mutex<Option<(Instant, Arc<StatusView>)>>;
+
+/// Short-lived stale-while-revalidate cache for the expensive anonymous status projection.
+/// The HTML and JSON responses remain `no-store`; this cache is process-local and contains only
+/// the already public, fail-closed read model.
+#[derive(Clone)]
+pub struct PublicStatusCache {
+    ttl: Duration,
+    inner: Arc<CachedPublicStatus>,
+    refreshing: Arc<AtomicBool>,
+}
+
+impl PublicStatusCache {
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            inner: Arc::new(Mutex::new(None)),
+            refreshing: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Populate the production cache before the public listener starts accepting traffic.
+    pub async fn warm(&self, store: Arc<dyn Store>, catalog: &[PublicComponent], now: i64) {
+        if self.ttl.is_zero() {
+            return;
+        }
+        let fresh = Arc::new(build_public_status(store.as_ref(), now, catalog).await);
+        *self.inner.lock().expect("status cache lock poisoned") = Some((Instant::now(), fresh));
+    }
+
+    /// Return a fresh snapshot when available. Once stale, serve it immediately and let exactly
+    /// one background task rebuild the projection; an empty cache is filled synchronously.
+    pub async fn get(
+        &self,
+        store: Arc<dyn Store>,
+        catalog: &[PublicComponent],
+        now: i64,
+    ) -> Arc<StatusView> {
+        if self.ttl.is_zero() {
+            return Arc::new(build_public_status(store.as_ref(), now, catalog).await);
+        }
+
+        if let Some((at, snapshot)) = self
+            .inner
+            .lock()
+            .expect("status cache lock poisoned")
+            .as_ref()
+        {
+            if at.elapsed() < self.ttl {
+                return Arc::clone(snapshot);
+            }
+            let stale = Arc::clone(snapshot);
+            if self
+                .refreshing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                let cache = self.clone();
+                let catalog = catalog.to_vec();
+                tokio::spawn(async move {
+                    let fresh = Arc::new(build_public_status(store.as_ref(), now, &catalog).await);
+                    *cache.inner.lock().expect("status cache lock poisoned") =
+                        Some((Instant::now(), fresh));
+                    cache.refreshing.store(false, Ordering::Release);
+                });
+            }
+            return stale;
+        }
+
+        let fresh = Arc::new(build_public_status(store.as_ref(), now, catalog).await);
+        *self.inner.lock().expect("status cache lock poisoned") =
+            Some((Instant::now(), Arc::clone(&fresh)));
+        fresh
+    }
 }
 
 /// Uptime percentage from `(total, up)` counts. No data yet is treated as 100% (nominal):
@@ -685,6 +764,36 @@ async fn build_projected_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::InMemoryStore;
+
+    #[tokio::test]
+    async fn public_status_cache_reuses_fresh_model_and_zero_ttl_disables_it() {
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+        let cache = PublicStatusCache::new(Duration::from_secs(15));
+        let first = cache.get(Arc::clone(&store), &[], 1_000).await;
+        let second = cache.get(Arc::clone(&store), &[], 1_001).await;
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let disabled = PublicStatusCache::new(Duration::ZERO);
+        let first = disabled.get(Arc::clone(&store), &[], 1_000).await;
+        let second = disabled.get(store, &[], 1_001).await;
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn public_status_cache_returns_stale_model_without_waiting_for_refresh() {
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+        let cache = PublicStatusCache::new(Duration::from_secs(1));
+        let stale = Arc::new(build_public_status(store.as_ref(), 1_000, &[]).await);
+        *cache.inner.lock().expect("status cache lock poisoned") =
+            Some((Instant::now() - Duration::from_secs(2), Arc::clone(&stale)));
+
+        let returned =
+            tokio::time::timeout(Duration::from_millis(100), cache.get(store, &[], 1_002))
+                .await
+                .expect("a stale public model must return immediately");
+        assert!(Arc::ptr_eq(&returned, &stale));
+    }
 
     #[test]
     fn uptime_pct_math() {

@@ -1,11 +1,14 @@
 //! PUBLIC status surface: the server-rendered status page and the machine-readable JSON.
 //!
-//! Both are unauthenticated by design (placed behind a Sluice `auth=public` route). The
-//! page mirrors the Steadholme publication identity: app-bar, factual overall state, an
-//! operational snapshot strip, the active-incident ledger with expandable update timelines,
-//! scheduled maintenance, native category disclosures over compact component rows with rolling
-//! uptime + a read-model-declared evidence window, infra vitals when available, and a
-//! "Past incidents" section (last 14 days, grouped by day).
+//! Both are unauthenticated by design (placed behind a Sluice `auth=public` route). The page
+//! follows the Status v1 design (Figma "Status"): the overall state IS the page heading, an
+//! estate-wide 30-day evidence strip sits directly under it, active incidents carry a stage
+//! track instead of a status pill, maintenance windows show a countdown value, the public
+//! catalog is a grid of component tiles (each opening a detail popover), host capacity renders
+//! as gauges plus a 24-hour heat strip, and the 14-day history closes the live region.
+//!
+//! Vocabulary rule: every visible string is a name, a value, or an action — no counts, no
+//! eyebrows, and no repeated state words on an all-operational page.
 
 use axum::extract::State;
 use axum::http::{header, HeaderMap, HeaderValue};
@@ -13,20 +16,29 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
 use crate::handlers::{
-    app_css, dynamic_js, esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, hv,
-    incident_status_pill, rel_time, render_theme_switch, severity_pill, userbox, SHIELD_SVG,
+    dynamic_js, esc, fmt_countdown, fmt_date, fmt_datetime, fmt_latency, hv, incident_status_pill,
+    rel_time, render_theme_switch, severity_pill, APP_CSS_PATH, SHIELD_SVG,
 };
 use crate::i18n;
 use crate::model::{
-    affected_names, build_public_status, build_status, day_bucket, day_date, group_rollup,
-    maintenance_ongoing, ComponentView, StatusView, DAY_SECS,
+    affected_names, build_status, day_bucket, day_date, group_rollup, maintenance_ongoing,
+    ComponentView, StatusView, DAY_SECS,
 };
 use crate::store::{Incident, IncidentUpdate};
 use crate::{now_secs, vitals, AppState};
 
 const STATUS_HTML: &str = include_str!("../../templates/status.html");
+const STATUS_PAGE_JS: &str = include_str!("../../static/status-page.js");
 const STATUS_LIVE_ID: &str = "status-live";
 const STATUS_LIVE_SELECTOR: &str = "#status-live";
+/// "Past incidents" horizon in days.
+const HISTORY_DAYS: i64 = 14;
+
+const ICON_BELL: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>"#;
+const ICON_RSS: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>"#;
+const ICON_BRACES: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/></svg>"#;
+const ICON_WEBHOOK: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>"#;
+const ICON_HISTORY: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M12 7v5l4 2"/></svg>"#;
 
 /// `GET /status` — the public status page (no auth).
 ///
@@ -39,8 +51,16 @@ pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> R
     let now = now_secs();
     let loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
     let theme = odyssey::resolve_theme(hv(&headers, "cookie"));
-    let mut view =
-        build_public_status(state.store.as_ref(), now, &state.config.public_catalog).await;
+    let mut view = state
+        .public_status
+        .get(
+            std::sync::Arc::clone(&state.store),
+            &state.config.public_catalog,
+            now,
+        )
+        .await
+        .as_ref()
+        .clone();
     attach_infra(&mut view, &state, now);
 
     let body = if is_wire_request(&headers) {
@@ -62,8 +82,16 @@ pub async fn status_page(State(state): State<AppState>, headers: HeaderMap) -> R
 pub async fn api_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let now = now_secs();
     let _loc = odyssey::resolve_locale(hv(&headers, "cookie"), hv(&headers, "accept-language"));
-    let mut view =
-        build_public_status(state.store.as_ref(), now, &state.config.public_catalog).await;
+    let mut view = state
+        .public_status
+        .get(
+            std::sync::Arc::clone(&state.store),
+            &state.config.public_catalog,
+            now,
+        )
+        .await
+        .as_ref()
+        .clone();
     attach_infra(&mut view, &state, now);
     let mut response = Json(view).into_response();
     response
@@ -97,6 +125,10 @@ fn attach_infra(view: &mut StatusView, state: &AppState, now: i64) {
 fn is_wire_request(headers: &HeaderMap) -> bool {
     hv(headers, "x-wire").is_some_and(|value| value.trim() == "1")
 }
+
+// ---------------------------------------------------------------------------------------------
+// Locale-aware formatting helpers
+// ---------------------------------------------------------------------------------------------
 
 fn render_lang_switch(loc: odyssey::Locale) -> String {
     let mut out = format!(
@@ -193,14 +225,6 @@ fn status_label_l(loc: odyssey::Locale, status: &str) -> String {
     i18n::t(loc, key).to_string()
 }
 
-fn status_pill_l(loc: odyssey::Locale, status: &str) -> String {
-    format!(
-        r#"<span class="pill {cls}">{label}</span>"#,
-        cls = crate::handlers::status_pill_class(status),
-        label = esc(&status_label_l(loc, status)),
-    )
-}
-
 fn incident_status_label_l(loc: odyssey::Locale, status: &str) -> String {
     if loc == odyssey::Locale::En {
         return crate::handlers::incident_status_label(status);
@@ -250,11 +274,32 @@ fn severity_pill_l(loc: odyssey::Locale, severity: &str) -> String {
     )
 }
 
+/// The shape-coded state glyph. Circle = operational, diamond = degraded, square = down,
+/// ring = maintenance, dash = pending (never probed). Colour alone never carries the state.
+fn mark(state: &str, size: &str) -> String {
+    let size_cls = if size.is_empty() {
+        String::new()
+    } else {
+        format!(" mark--{size}")
+    };
+    format!(r#"<span class="mark mark--{state}{size_cls}" aria-hidden="true"></span>"#)
+}
+
+/// A component's visible state token: a never-probed component reads `pending` rather than
+/// `operational`, so the page never claims evidence it does not have.
+fn tile_state(c: &ComponentView) -> &'static str {
+    if c.last_checked.is_none() && c.status == "operational" {
+        "pending"
+    } else {
+        c.status
+    }
+}
+
 fn render_refresh(loc: odyssey::Locale) -> String {
     odyssey::link_button_with_wire(
         "/status",
         i18n::t(loc, "status.refresh"),
-        odyssey::Variant::Secondary,
+        odyssey::Variant::Ghost,
         odyssey::BtnOpts {
             small: true,
             ..Default::default()
@@ -269,6 +314,47 @@ fn render_refresh(loc: odyssey::Locale) -> String {
     .0
 }
 
+/// Current UTC wall clock as a value in the app bar (`HH:MM UTC`); ticked by the page script.
+fn render_clock(now: i64) -> String {
+    match time::OffsetDateTime::from_unix_timestamp(now) {
+        Ok(dt) => format!(
+            r#"<time class="clock" datetime="{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:00Z" data-clock>{h:02}:{mi:02} UTC</time>"#,
+            y = dt.year(),
+            mo = u8::from(dt.month()),
+            d = dt.day(),
+            h = dt.hour(),
+            mi = dt.minute(),
+        ),
+        Err(_) => String::new(),
+    }
+}
+
+/// The "Get updates" popover: RSS and JSON are always offered; the webhook entry appears only
+/// when the operator has enabled anonymous webhook registration.
+fn render_updates_menu(loc: odyssey::Locale, webhooks_enabled: bool) -> String {
+    let webhook = if webhooks_enabled {
+        format!(
+            r##"<a class="updates-pop__item" href="#subscribe">{ICON_WEBHOOK}{}</a>"##,
+            esc(i18n::t(loc, "status.webhook"))
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#"<details class="updates-pop">
+          <summary class="btn btn-secondary btn-sm updates-pop__btn" aria-label="{label}">{ICON_BELL}<span class="updates-pop__label">{label}</span></summary>
+          <nav class="updates-pop__menu">
+            <a class="updates-pop__item" href="/feed.xml">{ICON_RSS}{rss}</a>
+            <a class="updates-pop__item" href="/api/status">{ICON_BRACES}{json}</a>
+            {webhook}
+          </nav>
+        </details>"#,
+        label = esc(i18n::t(loc, "status.get_updates")),
+        rss = esc(i18n::t(loc, "status.rss_feed")),
+        json = esc(i18n::t(loc, "status.json_api")),
+    )
+}
+
 fn render_status(
     view: &StatusView,
     now: i64,
@@ -276,48 +362,24 @@ fn render_status(
     theme: &str,
     webhooks_enabled: bool,
 ) -> String {
-    let updated = rel_time_l(loc, view.updated_at, now);
-    let webhook_link = if webhooks_enabled {
-        format!(
-            r##"<a class="updates-pop__item" href="#subscribe">{}</a>"##,
-            esc(i18n::t(loc, "status.webhook"))
-        )
-    } else {
-        String::new()
-    };
+    // Static chrome first; content that may contain operator-authored text (incident titles and
+    // bodies) is substituted LAST so a literal `{{...}}` inside it can never be re-expanded.
     STATUS_HTML
-        .replace("{{CSS}}", app_css())
         .replace("{{LANG}}", loc.bcp47())
         .replace("{{THEME}}", odyssey::html_theme_attr(theme))
         .replace("{{COLOR_SCHEME}}", odyssey::color_scheme_meta(theme))
+        .replace("{{CSS_PATH}}", APP_CSS_PATH)
         .replace("{{SHIELD}}", SHIELD_SVG)
-        .replace("{{THEMESWITCH}}", &render_theme_switch(theme))
-        .replace("{{USERBOX}}", &userbox(i18n::t(loc, "status.topbar"), None))
-        .replace("{{LANGSWITCH}}", &render_lang_switch(loc))
         .replace("{{SKIP_TO_STATUS}}", i18n::t(loc, "status.skip_to_content"))
-        .replace("{{STATUS_TITLE}}", i18n::t(loc, "status.title"))
-        .replace("{{STATUS_SUB}}", i18n::t(loc, "status.sub"))
-        .replace(
-            "{{PUBLIC_SIGNAL}}",
-            &format!(
-                r#"<span class="statushead__signal"><span aria-hidden="true"></span>{}</span>"#,
-                esc(i18n::t(loc, "status.public_read_only"))
-            ),
-        )
-        .replace("{{REFRESH}}", &render_refresh(loc))
-        .replace("{{GET_UPDATES}}", i18n::t(loc, "status.get_updates"))
-        .replace("{{WEBHOOK_LINK}}", &webhook_link)
-        .replace("{{RSS_FEED}}", i18n::t(loc, "status.rss_feed"))
-        .replace("{{JSON_API}}", i18n::t(loc, "status.json_api"))
-        .replace("{{STATUS_LIVE}}", &render_status_live(view, now, loc))
-        .replace("{{SUBSCRIBE}}", &render_subscribe(loc, webhooks_enabled))
-        .replace("{{FOOTER}}", i18n::t(loc, "status.footer"))
-        .replace("{{RSS}}", i18n::t(loc, "status.rss"))
-        .replace(
-            "{{UPDATED_LABEL}}",
-            &i18n::tf(loc, "status.updated", &[("time", &updated)]),
-        )
+        .replace("{{CLOCK}}", &render_clock(now))
+        .replace("{{LANGSWITCH}}", &render_lang_switch(loc))
+        .replace("{{THEMESWITCH}}", &render_theme_switch(theme))
+        .replace("{{UPDATES}}", &render_updates_menu(loc, webhooks_enabled))
+        .replace("{{CHANNELS}}", &render_channels(loc, webhooks_enabled))
+        .replace("{{FOOT}}", &render_footer(view, now, loc))
         .replace("{{SCRIPTS}}", dynamic_js())
+        .replace("{{PAGE_JS}}", STATUS_PAGE_JS)
+        .replace("{{STATUS_LIVE}}", &render_status_live(view, now, loc))
 }
 
 /// Render the one replaceable public status region. Full-page SSR and Wire fragments call this
@@ -325,65 +387,23 @@ fn render_status(
 fn render_status_live(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     format!(
         r#"<div id="{id}" class="status-live" role="region" aria-label="{label}">
-{banner}
-{snapshot}
+{masthead}
+{estate}
 {active}
 {maintenance}
-<section class="card status-components">
-  <div class="card__head card__head--split"><h2>{components_title}</h2>{component_count}</div>
-  <div class="card__body">{components}</div>
-</section>
+{catalog}
 {infra}
-<section class="status-history">
-  <h2 class="section-title">{past_title}</h2>
-  <p class="sub">{history_note} <a href="/feed.xml">{rss_feed}</a>.</p>
-  {past_incidents}
-</section>
+{history}
 </div>"#,
         id = STATUS_LIVE_ID,
         label = esc(i18n::t(loc, "status.live_region")),
-        banner = render_hero(view, now, loc),
-        snapshot = render_snapshot(view, loc),
+        masthead = render_masthead(view, now, loc),
+        estate = render_estate(view, now, loc),
         active = render_active_incidents(view, now, loc),
         maintenance = render_maintenances(view, now, loc),
-        components_title = esc(i18n::t(loc, "status.components")),
-        component_count = render_component_count(view, loc),
-        components = render_components(view, now, loc),
+        catalog = render_catalog(view, now, loc),
         infra = render_infra(loc, view.infra.as_ref(), now),
-        past_title = esc(i18n::t(loc, "status.past")),
-        history_note = esc(i18n::t(loc, "status.history_note")),
-        rss_feed = esc(i18n::t(loc, "status.rss_feed")),
-        past_incidents = render_past_incidents(view, now, loc),
-    )
-}
-
-fn render_snapshot(view: &StatusView, loc: odyssey::Locale) -> String {
-    let active = view
-        .incidents
-        .iter()
-        .filter(|incident| incident.status != "resolved")
-        .count();
-    let elevated = if active > 0 {
-        " bc-snapshot__n--warn"
-    } else {
-        ""
-    };
-    format!(
-        r#"<section class="bc-snapshot" aria-label="{label}">
-  <div class="bc-snapshot__item"><strong class="bc-snapshot__n">{services}</strong><span>{services_label}</span></div>
-  <div class="bc-snapshot__item"><strong class="bc-snapshot__n{elevated}">{active}</strong><span>{incidents_label}</span></div>
-  <div class="bc-snapshot__item"><strong class="bc-snapshot__n">{maintenance}</strong><span>{maintenance_label}</span></div>
-  <div class="bc-snapshot__item"><strong class="bc-snapshot__n">{days}</strong><span>{evidence_label}</span></div>
-</section>"#,
-        label = esc(i18n::t(loc, "status.snapshot.label")),
-        services = view.components.len(),
-        services_label = esc(i18n::t(loc, "status.snapshot.services")),
-        active = active,
-        incidents_label = esc(i18n::t(loc, "status.snapshot.incidents")),
-        maintenance = view.maintenances.len(),
-        maintenance_label = esc(i18n::t(loc, "status.snapshot.maintenance")),
-        days = view.history_days,
-        evidence_label = esc(i18n::t(loc, "status.snapshot.evidence")),
+        history = render_history(view, now, loc),
     )
 }
 
@@ -400,28 +420,15 @@ where
     (count > 0).then_some(sum / count as f64)
 }
 
-fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
-    let (cls, headline_key, sub_key) = match view.overall {
-        "down" => (
-            "status-hero--down",
-            "status.hero.down.title",
-            "status.hero.down.sub",
-        ),
-        "degraded" => (
-            "status-hero--warn",
-            "status.hero.warn.title",
-            "status.hero.warn.sub",
-        ),
-        "maintenance" => (
-            "status-hero--info",
-            "status.hero.maint.title",
-            "status.hero.maint.sub",
-        ),
-        _ => (
-            "status-hero--ok",
-            "status.hero.ok.title",
-            "status.hero.ok.sub",
-        ),
+/// The masthead: the overall state is the page heading. Meta values follow — evidence-window
+/// uptime, the affected count (only when something is not operational), the update stamp, and
+/// the Refresh action.
+fn render_masthead(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
+    let (state, headline_key) = match view.overall {
+        "down" => ("down", "status.hero.down.title"),
+        "degraded" => ("degraded", "status.hero.warn.title"),
+        "maintenance" => ("maintenance", "status.hero.maint.title"),
+        _ => ("operational", "status.hero.ok.title"),
     };
     // Affected is derived from the projected component states themselves — never from incident
     // affected-name lists, which may name internal checks or lag behind the probes. A
@@ -432,21 +439,19 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
         .iter()
         .filter(|c| c.status != "operational")
         .count();
+    let days = view.history_days.to_string();
     let uptime = checked_uptime_avg(view.components.iter())
         .map(|avg| {
-            let days = view.history_days.to_string();
-            let title = i18n::tf(loc, "status.uptime.average_all", &[("days", &days)]);
-            let window = i18n::tf(loc, "status.uptime.window", &[("days", &days)]);
             format!(
-                r#"<span class="status-hero__uptime" title="{title}"><strong>{avg:.2}%</strong> {window}</span>"#,
-                title = esc(&title),
-                window = esc(&window),
+                r#"<span class="mast__uptime" title="{title}"><b>{avg:.2}%</b><small>{window}</small></span>"#,
+                title = esc(&i18n::tf(loc, "status.uptime.average_all", &[("days", &days)])),
+                window = esc(&i18n::tf(loc, "status.window.days", &[("days", &days)])),
             )
         })
         .unwrap_or_default();
     let affected = if affected_count > 0 {
         format!(
-            r#"<span class="status-hero__affected">{}</span>"#,
+            r#"<span class="mast__affected">{}</span>"#,
             esc(&i18n::tf(
                 loc,
                 "status.hero.affected",
@@ -460,79 +465,121 @@ fn render_hero(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
         String::new()
     };
     format!(
-        r#"<section class="status-hero {cls}">
-  <span class="status-hero__mark status-hero__mark--{state}" aria-hidden="true"></span>
-  <div class="status-hero__text">
-    <h2 class="status-hero__headline">{headline}</h2>
-    <p class="status-hero__sub">{sub}</p>
-  </div>
-  <div class="status-hero__meta">
-    {uptime}
-    {affected}
-    <span class="status-hero__updated">{updated}</span>
-  </div>
+        r#"<section class="mast mast--{state}">
+  {mark}
+  <h1 id="status-title" class="mast__headline">{headline}</h1>
+  <div class="mast__meta">{uptime}{affected}<span class="mast__updated">{updated}</span>{refresh}</div>
 </section>"#,
+        mark = mark(state, "xl"),
         headline = esc(i18n::t(loc, headline_key)),
-        state = state_mod(view.overall),
-        sub = esc(i18n::t(loc, sub_key)),
         updated = esc(&i18n::tf(
             loc,
             "status.updated",
             &[("time", &rel_time_l(loc, view.updated_at, now))]
         )),
+        refresh = render_refresh(loc),
     )
 }
 
-fn render_component_count(view: &StatusView, loc: odyssey::Locale) -> String {
-    if view.components.is_empty() {
+/// Estate timeline: one cell per UTC day of the evidence window, the WORST public component
+/// state of that day (down > warn > ok; unknown only when no component has data).
+fn render_estate(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
+    let Some(first) = view.components.first() else {
+        return String::new();
+    };
+    let len = first.days.len();
+    if len == 0 {
         return String::new();
     }
-    if loc == odyssey::Locale::En {
-        return format!(
-            r#"<span class="card__head-meta">{} monitored</span>"#,
-            view.components.len()
-        );
+    let incident_by_day = incident_titles_by_day(view);
+    let no_data = i18n::t(loc, "status.bar.no_data");
+    let mut cells = String::new();
+    for i in 0..len {
+        let mut worst = "unknown";
+        let (mut sum, mut n) = (0.0f64, 0usize);
+        for c in &view.components {
+            let Some(d) = c.days.get(i) else { continue };
+            if let Some(pct) = d.uptime {
+                sum += pct;
+                n += 1;
+            }
+            worst = match (worst, d.status) {
+                (_, "down") | ("down", _) => "down",
+                (_, "warn") | ("warn", _) => "warn",
+                (_, "ok") | ("ok", _) => "ok",
+                (w, _) => w,
+            };
+        }
+        let date = first.days[i].date.as_str();
+        let uptime = if n > 0 {
+            format!("{:.2}%", sum / n as f64)
+        } else {
+            no_data.to_string()
+        };
+        let inc_attr = if matches!(worst, "warn" | "down") {
+            incident_by_day
+                .get(date)
+                .map(|s| format!(r#" data-inc="{}""#, esc(s)))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        cells.push_str(&format!(
+            r#"<span class="cell cell--{worst}" data-date="{date}" data-uptime="{uptime}"{inc_attr}></span>"#,
+            date = esc(date),
+            uptime = esc(&uptime),
+        ));
     }
+    let days = len.to_string();
     format!(
-        r#"<span class="card__head-meta">{}</span>"#,
-        esc(&i18n::tf(
-            loc,
-            "status.components.monitored",
-            &[("n", &view.components.len().to_string())]
-        ))
+        r#"<section class="estate">
+  <div class="cells" role="img" aria-label="{label}">{cells}</div>
+  {axis}
+</section>"#,
+        label = esc(&i18n::tf(loc, "status.estate.label", &[("days", &days)])),
+        axis = render_axis(loc, now, len),
     )
 }
 
-/// The Components body. With no groups configured this renders a flat list of compact rows.
-/// With groups, components are rendered under collapsible group sections, and any ungrouped
-/// components fall into a trailing "Other" section.
-fn render_components(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
+/// Date axis under a day strip: first day · middle day · Today (all values).
+fn render_axis(loc: odyssey::Locale, now: i64, len: usize) -> String {
+    let today = day_bucket(now);
+    let first = today - len.saturating_sub(1) as i64;
+    let mid = today - (len / 2) as i64;
+    format!(
+        r#"<div class="axis"><span>{start}</span><span>{mid}</span><span>{today}</span></div>"#,
+        start = esc(&fmt_date_l(loc, first * DAY_SECS)),
+        mid = esc(&fmt_date_l(loc, mid * DAY_SECS)),
+        today = esc(i18n::t(loc, "status.uptime.today")),
+    )
+}
+
+/// The public catalog: one section per configured group (plus a trailing "Other" for
+/// ungrouped components) holding a grid of component tiles. Without groups the tiles render as
+/// one flat grid.
+fn render_catalog(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     if view.components.is_empty() {
         return format!(
-            r#"<div class="empty">{}</div>"#,
-            esc(i18n::t(loc, "status.no_components"))
+            r#"<section class="catalog" aria-label="{label}"><p class="catalog__empty">{empty}</p></section>"#,
+            label = esc(i18n::t(loc, "status.components")),
+            empty = esc(i18n::t(loc, "status.no_components")),
         );
     }
     let incident_by_day = incident_titles_by_day(view);
-    let team_first_day = team_first_data_day(view, now);
+    let mut out = format!(
+        r#"<section class="catalog" aria-label="{}">"#,
+        esc(i18n::t(loc, "status.components"))
+    );
     if view.groups.is_empty() {
-        let mut rows = String::new();
+        out.push_str(r#"<div class="tiles">"#);
         for c in &view.components {
-            rows.push_str(&render_component_row(
-                c,
-                now,
-                loc,
-                &incident_by_day,
-                team_first_day,
-            ));
+            out.push_str(&render_tile(c, now, loc, &incident_by_day));
         }
-        rows.push_str(&render_barlegend(view, loc, team_first_day));
-        return rows;
+        out.push_str("</div></section>");
+        return out;
     }
 
-    // Materialize non-empty sections in view order and determine each rollup; exactly one
-    // section starts open (see `section_open_index`).
-    let mut sections = Vec::new();
+    let mut sections: Vec<(&str, Vec<&ComponentView>)> = Vec::new();
     for g in &view.groups {
         let members: Vec<&ComponentView> = view
             .components
@@ -540,13 +587,9 @@ fn render_components(view: &StatusView, now: i64, loc: odyssey::Locale) -> Strin
             .filter(|c| c.group_id.as_deref() == Some(g.id.as_str()))
             .collect();
         if !members.is_empty() {
-            let statuses: Vec<&str> = members.iter().map(|c| c.status).collect();
-            let rollup = group_rollup(&statuses);
-            sections.push((g.name.as_str(), members, rollup));
+            sections.push((g.name.as_str(), members));
         }
     }
-
-    // Ungrouped components (group_id None, or pointing at a group that no longer exists).
     let known: std::collections::HashSet<&str> =
         view.groups.iter().map(|g| g.id.as_str()).collect();
     let ungrouped: Vec<&ComponentView> = view
@@ -555,164 +598,93 @@ fn render_components(view: &StatusView, now: i64, loc: odyssey::Locale) -> Strin
         .filter(|c| c.group_id.as_deref().is_none_or(|id| !known.contains(id)))
         .collect();
     if !ungrouped.is_empty() {
-        let statuses: Vec<&str> = ungrouped.iter().map(|c| c.status).collect();
         let other_label = if loc == odyssey::Locale::En {
             "Other"
         } else {
             i18n::t(loc, "status.group.other")
         };
-        sections.push((other_label, ungrouped, group_rollup(&statuses)));
+        sections.push((other_label, ungrouped));
     }
-
-    let rollups: Vec<&str> = sections.iter().map(|(_, _, rollup)| *rollup).collect();
-    let open_idx = section_open_index(&rollups);
-
-    let mut out = String::new();
-    for (idx, (name, members, rollup)) in sections.into_iter().enumerate() {
-        let is_open = open_idx == Some(idx);
-        out.push_str(&render_group_section(
-            name,
-            &members,
-            rollup,
-            is_open,
-            now,
-            loc,
-            &incident_by_day,
-            team_first_day,
-        ));
+    for (name, members) in sections {
+        out.push_str(&render_group(name, &members, now, loc, &incident_by_day));
     }
-    out.push_str(&render_barlegend(view, loc, team_first_day));
+    out.push_str("</section>");
     out
 }
 
-/// Severity rank used to pick which category section starts expanded. Higher is worse.
-fn section_rank(rollup: &str) -> u8 {
-    match rollup {
-        "down" => 3,
-        "degraded" => 2,
-        "maintenance" => 1,
-        _ => 0,
-    }
-}
-
-/// Index of the single category section that starts expanded: the worst rollup wins, and rank
-/// ties keep the earliest section (strict-max, first-wins). An all-operational page still
-/// focuses the first section, so a grouped page always opens exactly one fold. `None` only
-/// when there are no sections at all (empty and flat layouts render no folds).
-fn section_open_index(rollups: &[&str]) -> Option<usize> {
-    if rollups.is_empty() {
-        return None;
-    }
-    let mut open_idx = 0;
-    let mut best_rank = 0;
-    for (idx, rollup) in rollups.iter().enumerate() {
-        let rank = section_rank(rollup);
-        if rank > best_rank {
-            best_rank = rank;
-            open_idx = idx;
-        }
-    }
-    Some(open_idx)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_group_section(
+fn render_group(
     name: &str,
     members: &[&ComponentView],
-    rollup: &str,
-    is_open: bool,
     now: i64,
     loc: odyssey::Locale,
     incident_by_day: &std::collections::HashMap<String, String>,
-    team_first_day: Option<i64>,
 ) -> String {
-    let open = if is_open { " open" } else { "" };
+    let statuses: Vec<&str> = members.iter().map(|c| c.status).collect();
+    let rollup = group_rollup(&statuses);
+    let days = members
+        .first()
+        .map_or(0, |component| component.days.len())
+        .to_string();
     let uptime = checked_uptime_avg(members.iter().copied())
         .map(|avg| {
-            let days = members
-                .first()
-                .map_or(0, |component| component.days.len())
-                .to_string();
-            let title = i18n::tf(loc, "status.uptime.average_group", &[("days", &days)]);
             format!(
-                r#"<span class="cgroup__uptime" title="{}">{avg:.2}%</span>"#,
-                esc(&title),
+                r#"<span class="group__uptime" title="{}">{avg:.2}%</span>"#,
+                esc(&i18n::tf(
+                    loc,
+                    "status.uptime.average_group",
+                    &[("days", &days)]
+                )),
             )
         })
         .unwrap_or_default();
-    let count_label = if loc == odyssey::Locale::En {
-        format!("{} components", members.len())
+    let state_word = if rollup == "operational" {
+        String::new()
     } else {
-        i18n::tf(
-            loc,
-            "status.group.count",
-            &[("n", &members.len().to_string())],
+        format!(
+            r#"<span class="group__state">{}</span>"#,
+            esc(&status_label_l(loc, rollup))
         )
     };
     let mut out = format!(
-        r#"<details class="cgroup"{open}>
-  <summary class="cgroup__head">
-    <span class="cgroup__chev" aria-hidden="true"></span>
-    <h3 class="cgroup__name">{name}</h3>
-    <span class="cgroup__count">{count}</span>
-    {uptime}
-    {pill}
-  </summary>
-  <div class="cgroup__body">"#,
+        r#"<section class="group group--{rollup}">
+  <header class="group__head">{mark}<h2 class="group__name">{name}</h2><span class="group__rule" aria-hidden="true"></span>{uptime}{state_word}</header>
+  <div class="tiles">"#,
+        mark = mark(rollup, "md"),
         name = esc(name),
-        count = esc(&count_label),
-        pill = status_pill_l(loc, rollup),
     );
     for c in members {
-        out.push_str(&render_component_row(
-            c,
-            now,
-            loc,
-            incident_by_day,
-            team_first_day,
-        ));
+        out.push_str(&render_tile(c, now, loc, incident_by_day));
     }
-    out.push_str("</div></details>");
+    out.push_str("</div></section>");
     out
 }
 
-fn state_mod(status: &str) -> &'static str {
-    match status {
-        "down" => "down",
-        "degraded" => "warn",
-        "maintenance" => "info",
-        _ => "ok",
-    }
-}
-
-/// Render a compact component row with latest latency and the declared evidence window.
-fn render_component_row(
+/// Day cells for one component (mini in the tile face, full in the detail).
+fn render_day_cells(
     c: &ComponentView,
-    now: i64,
     loc: odyssey::Locale,
+    now: i64,
     incident_by_day: &std::collections::HashMap<String, String>,
-    team_first_day: Option<i64>,
+    with_incidents: bool,
 ) -> String {
     let first_data_idx = c.days.iter().position(|d| d.uptime.is_some());
     let first_day = first_data_idx
         .map(|idx| day_bucket(now) - c.days.len().saturating_sub(1) as i64 + idx as i64);
-    let monitoring_since = first_day.map(|day| fmt_date_l(loc, day * DAY_SECS));
-    let no_data_text = match &monitoring_since {
+    let no_data_text = match first_day.map(|day| fmt_date_l(loc, day * DAY_SECS)) {
         Some(date) if loc == odyssey::Locale::En => {
             format!("no data — monitoring began {date}")
         }
-        Some(date) => i18n::tf(loc, "status.bar.no_data_since", &[("date", date)]),
+        Some(date) => i18n::tf(loc, "status.bar.no_data_since", &[("date", &date)]),
         None if loc == odyssey::Locale::En => "no data".to_string(),
         None => i18n::t(loc, "status.bar.no_data").to_string(),
     };
-
-    let mut bars = String::new();
+    let mut cells = String::new();
     for d in &c.days {
         let data_uptime = match d.uptime {
             Some(pct) => format!("{pct:.2}%"),
             None => no_data_text.clone(),
         };
-        let inc_attr = if matches!(d.status, "warn" | "down") {
+        let inc_attr = if with_incidents && matches!(d.status, "warn" | "down") {
             incident_by_day
                 .get(&d.date)
                 .map(|s| format!(r#" data-inc="{}""#, esc(s)))
@@ -720,62 +692,41 @@ fn render_component_row(
         } else {
             String::new()
         };
-        bars.push_str(&format!(
-            r#"<span class="bar bar-{cls}" data-date="{date}" data-status="{status}" data-uptime="{uptime}"{inc_attr}></span>"#,
+        cells.push_str(&format!(
+            r#"<span class="cell cell--{cls}" data-date="{date}" data-uptime="{uptime}"{inc_attr}></span>"#,
             cls = d.status,
             date = esc(&d.date),
-            status = esc(d.status),
             uptime = esc(&data_uptime),
         ));
     }
-    let since = if c.days.first().is_some_and(|d| d.uptime.is_none()) {
-        match (first_day, monitoring_since) {
-            (Some(day), Some(_)) if team_first_day == Some(day) => String::new(),
-            (_, Some(date)) => {
-                let text = if loc == odyssey::Locale::En {
-                    format!("monitoring since {date}")
-                } else {
-                    i18n::tf(loc, "status.row.monitoring_since", &[("date", &date)])
-                };
-                format!(r#"<span class="crow__since">{}</span>"#, esc(&text))
-            }
-            _ => {
-                let text = if loc == odyssey::Locale::En {
-                    "awaiting first check"
-                } else {
-                    i18n::t(loc, "status.row.awaiting_first_check")
-                };
-                format!(r#"<span class="crow__since">{}</span>"#, esc(text))
-            }
-        }
-    } else {
-        String::new()
-    };
-    let latest_latency = fmt_latency(c.latency_ms);
-    let latency = match c.latency_avg_ms {
-        Some(avg) => format!("~{avg} ms"),
-        None => "—".to_string(),
-    };
-    let spark = render_latency_spark(&c.latency_points);
-    let pct_title = if c.last_checked.is_some() {
-        i18n::tf(
-            loc,
-            "status.uptime.component_title",
-            &[("days", &c.days.len().to_string())],
-        )
+    cells
+}
+
+/// One component tile: name · state mark · mini evidence strip · uptime · latency, plus the
+/// state word only when the component is NOT operational. The tile is a native `<details>`
+/// whose body is the detail popover (`name="tile"` keeps one open at a time).
+fn render_tile(
+    c: &ComponentView,
+    now: i64,
+    loc: odyssey::Locale,
+    incident_by_day: &std::collections::HashMap<String, String>,
+) -> String {
+    let state = tile_state(c);
+    let days = c.days.len().to_string();
+    let checked = c.last_checked.is_some();
+    let pct_title = if checked {
+        i18n::tf(loc, "status.uptime.component_title", &[("days", &days)])
     } else if loc == odyssey::Locale::En {
         "awaiting first check".to_string()
     } else {
         i18n::t(loc, "status.row.awaiting_first_check").to_string()
     };
-    let pct = if c.last_checked.is_some() {
+    let pct = if checked {
         format!("{:.2}%", c.uptime_90d)
     } else {
         "—".to_string()
     };
-    let state = state_mod(c.status);
-    let state_label = status_label_l(loc, c.status);
-    let evidence_label = format!("{} · {} · {} · {}", c.name, state_label, pct, pct_title);
+    let latest_latency = fmt_latency(c.latency_ms);
     let latency_title = if loc == odyssey::Locale::En {
         format!("24h average · latest {latest_latency}")
     } else {
@@ -785,27 +736,128 @@ fn render_component_row(
             &[("latest", &latest_latency)],
         )
     };
+    let latency = match c.latency_avg_ms {
+        Some(avg) => format!("~{avg} ms"),
+        None => String::new(),
+    };
+    let state_word = match state {
+        "operational" => String::new(),
+        "pending" => format!(
+            r#"<span class="tile__state">{}</span>"#,
+            esc(if loc == odyssey::Locale::En {
+                "Awaiting first check"
+            } else {
+                i18n::t(loc, "status.row.awaiting_first_check")
+            })
+        ),
+        other => format!(
+            r#"<span class="tile__state">{}</span>"#,
+            esc(&status_label_l(loc, other))
+        ),
+    };
     format!(
-        r#"<div class="crow">
-  <span class="crow__id">
-    <span class="crow__dot crow__dot--{state}" aria-hidden="true"></span>
-    <span class="crow__name" title="{name}">{name}</span>
-  </span>
-  <span class="bc-lat">{spark}<span class="crow__lat" title="{latency_title}">{latency}</span></span>
-  <div class="crow__track" role="img" aria-label="{evidence_label}"><div class="bars" aria-hidden="true">{bars}</div></div>
-  <span class="crow__pct" title="{pct_title}">{pct}</span>
-  <span class="crow__state crow__state--{state}">{label}</span>
-  {since}
-</div>"#,
+        r#"<details class="tile tile--{state}" name="tile">
+  <summary class="tile__face" aria-label="{detail_label}">
+    <span class="tile__head"><span class="tile__name">{name}</span>{mark}</span>
+    <span class="cells cells--mini" aria-hidden="true">{mini}</span>
+    <span class="tile__foot"><span class="tile__up" title="{pct_title}">{pct}</span><span class="tile__lat" title="{latency_title}">{latency}</span></span>
+    {state_word}
+  </summary>
+  {detail}
+</details>"#,
+        detail_label = esc(&i18n::tf(loc, "status.tile.detail", &[("name", &c.name)])),
         name = esc(&c.name),
-        latency_title = esc(&latency_title),
-        latency = esc(&latency),
-        spark = spark,
-        bars = bars,
+        mark = mark(state, "md"),
+        mini = render_day_cells(c, loc, now, incident_by_day, false),
         pct_title = esc(&pct_title),
         pct = esc(&pct),
+        latency_title = esc(&latency_title),
+        latency = esc(&latency),
+        detail = render_tile_detail(c, now, loc, incident_by_day),
+    )
+}
+
+/// The tile detail: uptime over the evidence window / 24 hours / 7 days, the full dated
+/// evidence strip, the 24-hour latency spark with average and latest values, and the
+/// monitoring-since value.
+fn render_tile_detail(
+    c: &ComponentView,
+    now: i64,
+    loc: odyssey::Locale,
+    incident_by_day: &std::collections::HashMap<String, String>,
+) -> String {
+    let state = tile_state(c);
+    let checked = c.last_checked.is_some();
+    let days = c.days.len().to_string();
+    let value = |pct: f64| {
+        if checked {
+            format!("{pct:.2}%")
+        } else {
+            "—".to_string()
+        }
+    };
+    let first_day = c
+        .days
+        .iter()
+        .position(|d| d.uptime.is_some())
+        .map(|idx| day_bucket(now) - c.days.len().saturating_sub(1) as i64 + idx as i64);
+    let since = match first_day {
+        Some(day) => {
+            let date = fmt_date_l(loc, day * DAY_SECS);
+            if loc == odyssey::Locale::En {
+                format!("monitoring since {date}")
+            } else {
+                i18n::tf(loc, "status.row.monitoring_since", &[("date", &date)])
+            }
+        }
+        None if loc == odyssey::Locale::En => "awaiting first check".to_string(),
+        None => i18n::t(loc, "status.row.awaiting_first_check").to_string(),
+    };
+    let latest_latency = fmt_latency(c.latency_ms);
+    let latency_title = if loc == odyssey::Locale::En {
+        format!("24h average · latest {latest_latency}")
+    } else {
+        i18n::tf(
+            loc,
+            "status.row.latency_title",
+            &[("latest", &latest_latency)],
+        )
+    };
+    let latency = match c.latency_avg_ms {
+        Some(avg) => format!("~{avg} ms"),
+        None => "—".to_string(),
+    };
+    let evidence_label = format!(
+        "{} · {} · {} · {}",
+        c.name,
+        status_label_l(loc, c.status),
+        value(c.uptime_90d),
+        i18n::tf(loc, "status.uptime.component_title", &[("days", &days)])
+    );
+    format!(
+        r#"<div class="tile__detail">
+    <div class="detail__head">{mark}<h3 class="detail__name">{name}</h3></div>
+    <div class="detail__values"><span><b>{u30}</b><small>{w30}</small></span><span><b>{u24}</b><small>{w24}</small></span><span><b>{u7}</b><small>{w7}</small></span></div>
+    <div class="cells" role="img" aria-label="{evidence_label}">{cells}</div>
+    {axis}
+    <div class="detail__latency">{spark}<span class="detail__ms"><b>{latency}</b><small>{latency_title}</small></span></div>
+    <span class="detail__since">{since}</span>
+  </div>"#,
+        mark = mark(state, "lg"),
+        name = esc(&c.name),
+        u30 = esc(&value(c.uptime_90d)),
+        w30 = esc(&i18n::tf(loc, "status.window.days", &[("days", &days)])),
+        u24 = esc(&value(c.uptime_24h)),
+        w24 = esc(&i18n::tf(loc, "status.window.hours", &[("hours", "24")])),
+        u7 = esc(&value(c.uptime_7d)),
+        w7 = esc(&i18n::tf(loc, "status.window.days", &[("days", "7")])),
         evidence_label = esc(&evidence_label),
-        label = esc(&state_label),
+        cells = render_day_cells(c, loc, now, incident_by_day, true),
+        axis = render_axis(loc, now, c.days.len()),
+        spark = render_latency_spark(&c.latency_points),
+        latency = esc(&latency),
+        latency_title = esc(&latency_title),
+        since = esc(&since),
     )
 }
 
@@ -823,29 +875,15 @@ fn render_latency_spark(points: &[Option<i64>]) -> String {
     let coords: Vec<String> = vals
         .iter()
         .map(|(i, v)| {
-            let x = *i as f64 / denom * 44.0;
-            let y = 13.0 - (*v as f64 / max * 12.0);
+            let x = *i as f64 / denom * 200.0;
+            let y = 38.0 - (*v as f64 / max * 36.0);
             format!("{x:.1},{y:.1}")
         })
         .collect();
     format!(
-        r#"<svg class="bc-lat-spark" viewBox="0 0 44 14" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" points="{}"/></svg>"#,
+        r#"<svg class="spark" viewBox="0 0 200 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" points="{}"/></svg>"#,
         coords.join(" ")
     )
-}
-
-fn component_first_data_day(c: &ComponentView, now: i64) -> Option<i64> {
-    c.days
-        .iter()
-        .position(|d| d.uptime.is_some())
-        .map(|idx| day_bucket(now) - c.days.len().saturating_sub(1) as i64 + idx as i64)
-}
-
-fn team_first_data_day(view: &StatusView, now: i64) -> Option<i64> {
-    view.components
-        .iter()
-        .filter_map(|c| component_first_data_day(c, now))
-        .min()
 }
 
 fn incident_titles_by_day(view: &StatusView) -> std::collections::HashMap<String, String> {
@@ -860,82 +898,50 @@ fn incident_titles_by_day(view: &StatusView) -> std::collections::HashMap<String
         .collect()
 }
 
-fn render_barlegend(
-    view: &StatusView,
-    loc: odyssey::Locale,
-    team_first_day: Option<i64>,
-) -> String {
-    let mid = checked_uptime_avg(view.components.iter())
-        .map(|avg| {
-            i18n::tf(
-                loc,
-                "status.uptime.legend_summary",
-                &[("uptime", &format!("{avg:.2}"))],
-            )
-        })
-        .unwrap_or_else(|| i18n::t(loc, "status.uptime.legend_empty").to_string());
-    let since = team_first_day
-        .map(|day| {
-            i18n::tf(
-                loc,
-                "status.uptime.monitoring_since",
-                &[("date", &fmt_date_l(loc, day * DAY_SECS))],
-            )
-        })
-        .unwrap_or_default();
-    let days = view.history_days.to_string();
+/// Public update channels: RSS feed and JSON API are always actions; the webhook form appears
+/// only when the operator explicitly enabled the hardened egress path.
+fn render_channels(loc: odyssey::Locale, webhooks_enabled: bool) -> String {
+    let form = if webhooks_enabled {
+        format!(
+            r#"
+  <form method="post" action="/subscriptions" class="webhook">
+    <label class="sr-only" for="sub-target">{field}</label>
+    <input type="url" id="sub-target" name="target" required placeholder="https://example.com/hooks/status">
+    <button class="btn btn-primary" type="submit">{ICON_WEBHOOK}{button}</button>
+  </form>"#,
+            field = esc(i18n::t(loc, "status.subscribe.field")),
+            button = esc(i18n::t(loc, "status.subscribe.button")),
+        )
+    } else {
+        String::new()
+    };
     format!(
-        r#"<div class="bc-barlegend"><span>{days_ago}</span><span class="bc-barlegend__mid">{mid}{since}</span><span>{today}</span></div>"#,
-        days_ago = esc(&i18n::tf(loc, "status.uptime.days_ago", &[("days", &days)])),
-        mid = esc(&mid),
-        since = esc(&since),
-        today = esc(i18n::t(loc, "status.uptime.today")),
+        r#"<section class="channels" id="subscribe">
+  <div class="channels__links"><a class="btn btn-secondary" href="/feed.xml">{ICON_RSS}{rss}</a><a class="btn btn-secondary" href="/api/status">{ICON_BRACES}{json}</a></div>{form}
+</section>"#,
+        rss = esc(i18n::t(loc, "status.rss_feed")),
+        json = esc(i18n::t(loc, "status.json_api")),
     )
 }
 
-/// Public update channels. RSS and JSON are always available. Anonymous webhook registration
-/// only appears when the operator explicitly enables the hardened egress path.
-fn render_subscribe(loc: odyssey::Locale, webhooks_enabled: bool) -> String {
-    if !webhooks_enabled {
-        return format!(
-            r#"<section class="card bc-channels" id="subscribe">
-  <div class="card__head"><h2>{title}</h2></div>
-  <div class="card__body">
-    <p class="hint">{body}</p>
-    <div class="bc-channels__links"><a class="btn btn-secondary" href="/feed.xml">{rss}</a><a class="btn btn-secondary" href="/api/status">{json}</a></div>
-    <p class="hint--muted">{note}</p>
-  </div>
-</section>"#,
-            title = esc(i18n::t(loc, "status.subscribe.title")),
-            body = esc(i18n::t(loc, "status.channels.body")),
-            rss = esc(i18n::t(loc, "status.rss_feed")),
-            json = esc(i18n::t(loc, "status.json_api")),
-            note = esc(i18n::t(loc, "status.channels.webhook_unavailable")),
-        );
-    }
+fn render_footer(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     format!(
-        r#"<section class="card" id="subscribe">
-  <div class="card__head"><h2>{title}</h2></div>
-  <div class="card__body">
-    <p class="hint">{body}</p>
-    <form method="post" action="/subscriptions" class="subscribe-form">
-      <div class="field">
-        <label for="sub-target">{field}</label>
-        <input type="url" id="sub-target" name="target" required placeholder="https://example.com/hooks/holdfast-status">
-      </div>
-      <button class="btn btn-primary" type="submit">{button}</button>
-    </form>
-    <p class="hint--muted">{note}</p>
-  </div>
-</section>"#,
-        title = esc(i18n::t(loc, "status.subscribe.title")),
-        body = esc(i18n::t(loc, "status.subscribe.body")),
-        field = esc(i18n::t(loc, "status.subscribe.field")),
-        button = esc(i18n::t(loc, "status.subscribe.button")),
-        note = esc(i18n::t(loc, "status.subscribe.note")),
+        r##"<footer class="site-foot">
+    <nav class="site-foot__links" aria-label="{past}"><a href="#past-incidents">{ICON_HISTORY}{past}</a><a href="/api/status">{ICON_BRACES}{json}</a><a href="/feed.xml">{ICON_RSS}{rss}</a></nav>
+    <span class="site-foot__updated">{updated}</span>
+  </footer>"##,
+        past = esc(i18n::t(loc, "status.past")),
+        json = esc(i18n::t(loc, "status.json_api")),
+        rss = esc(i18n::t(loc, "status.rss")),
+        updated = esc(&i18n::tf(
+            loc,
+            "status.updated",
+            &[("time", &rel_time_l(loc, view.updated_at, now))]
+        )),
     )
 }
 
+/// Host capacity: three gauges (worst host per metric) and the 24-hour heat strip.
 fn render_infra(loc: odyssey::Locale, infra: Option<&vitals::InfraPublic>, now: i64) -> String {
     let Some(infra) = infra else {
         return String::new();
@@ -946,7 +952,7 @@ fn render_infra(loc: odyssey::Locale, infra: Option<&vitals::InfraPublic>, now: 
         "ok" => "pill-ok",
         _ => "pill-state",
     };
-    let mut meters = String::new();
+    let mut gauges = String::new();
     for band in &infra.bands {
         let pct_text = band
             .worst_pct
@@ -956,8 +962,8 @@ fn render_infra(loc: odyssey::Locale, infra: Option<&vitals::InfraPublic>, now: 
             .worst_pct
             .map(|pct| pct.clamp(0.0, 100.0))
             .unwrap_or(0.0);
-        meters.push_str(&format!(
-            r#"<div class="bc-infra__meter"><span class="bc-infra__label">{label}</span><div class="bc-infra__gauge"><span class="bc-infra__fill bc-infra__fill--{band}" style="width:{width:.0}%"></span></div><span class="bc-infra__pct">{pct}</span><span class="bc-infra__band bc-infra__band--{band}">{band_label}</span></div>"#,
+        gauges.push_str(&format!(
+            r#"<div class="gauge gauge--{band}"><span class="gauge__head"><span class="gauge__label">{label}</span><span class="gauge__value">{pct}</span></span><span class="gauge__track"><span class="gauge__fill" style="width:{width:.0}%"></span></span><span class="gauge__band">{band_label}</span></div>"#,
             label = esc(infra_metric_label(loc, band.metric)),
             band = esc(band.band),
             pct = esc(&pct_text),
@@ -970,7 +976,7 @@ fn render_infra(loc: odyssey::Locale, infra: Option<&vitals::InfraPublic>, now: 
     for (idx, band) in infra.trend.iter().enumerate() {
         let bucket = current - infra.trend.len() as i64 + 1 + idx as i64;
         cells.push_str(&format!(
-            r#"<span class="bc-infra__cell bc-infra__cell--{band}" data-hour="{hour}" data-band="{band_label}"></span>"#,
+            r#"<span class="heat__cell heat__cell--{band}" data-hour="{hour}" data-band="{band_label}"></span>"#,
             band = esc(band),
             hour = esc(&hour_label(bucket)),
             band_label = esc(infra_band_label(loc, band)),
@@ -978,14 +984,19 @@ fn render_infra(loc: odyssey::Locale, infra: Option<&vitals::InfraPublic>, now: 
     }
 
     format!(
-        r#"<section class="card bc-infra"><div class="card__head card__head--split"><h2>{title}</h2><span class="pill {pill_cls}">{state}</span></div><div class="card__body"><div class="bc-infra__meters">{meters}</div><p class="bc-infra__trend-label">{trend}</p><div class="bc-infra__trend" role="img" aria-label="{trend}">{cells}</div><p class="bc-infra__note">{note}</p></div></section>"#,
+        r#"<section class="infra">
+  <div class="infra__head"><h2 class="infra__title">{title}</h2><span class="pill {pill_cls}">{state}</span></div>
+  <div class="infra__body">
+    <div class="gauges">{gauges}</div>
+    <div class="heat"><div class="heat__cells" role="img" aria-label="{trend}">{cells}</div><div class="axis"><span>{h24}</span><span>{h12}</span><span>{now_label}</span></div></div>
+  </div>
+</section>"#,
         title = esc(i18n::t(loc, "infra.title")),
-        pill_cls = pill_cls,
         state = esc(infra_state_label(loc, infra.overall)),
-        meters = meters,
         trend = esc(i18n::t(loc, "infra.trend")),
-        cells = cells,
-        note = esc(i18n::t(loc, "infra.note")),
+        h24 = esc(i18n::t(loc, "status.heat.h24")),
+        h12 = esc(i18n::t(loc, "status.heat.h12")),
+        now_label = esc(i18n::t(loc, "status.heat.now")),
     )
 }
 
@@ -1032,6 +1043,44 @@ fn updates_for<'a>(view: &'a StatusView, incident_id: &str) -> Vec<&'a IncidentU
         .collect()
 }
 
+/// Incident progress: Investigating → Identified → Monitoring → Resolved. The current stage is
+/// marked `aria-current="step"`; a resolved incident turns the whole track green.
+fn render_stage_track(loc: odyssey::Locale, status: &str) -> String {
+    const STAGES: [&str; 4] = ["investigating", "identified", "monitoring", "resolved"];
+    let current = STAGES.iter().position(|s| *s == status).unwrap_or(0);
+    let resolved = status == "resolved";
+    let mut out = format!(
+        r#"<div class="stages{}" aria-label="{}">"#,
+        if resolved { " stages--resolved" } else { "" },
+        esc(i18n::t(loc, "status.incident.progress"))
+    );
+    for (i, stage) in STAGES.iter().enumerate() {
+        let (cls, current_attr) = if i < current {
+            (" stage--done", "")
+        } else if i == current {
+            (" stage--now", r#" aria-current="step""#)
+        } else {
+            (" stage--todo", "")
+        };
+        if i > 0 {
+            out.push_str(&format!(
+                r#"<span class="stage__link{}" aria-hidden="true"></span>"#,
+                if i <= current {
+                    " stage__link--done"
+                } else {
+                    ""
+                }
+            ));
+        }
+        out.push_str(&format!(
+            r#"<span class="stage{cls}"{current_attr}><span class="stage__dot" aria-hidden="true"></span><span class="stage__label">{label}</span></span>"#,
+            label = esc(&incident_status_label_l(loc, stage)),
+        ));
+    }
+    out.push_str("</div>");
+    out
+}
+
 /// The expandable update timeline for one incident: its updates newest first, closing with
 /// the opening report (the incident row itself).
 fn render_timeline(
@@ -1043,8 +1092,9 @@ fn render_timeline(
     let mut items = String::new();
     for u in updates {
         items.push_str(&format!(
-            r#"<li class="timeline__item">{pill} <span class="timeline__time">{ago}</span><p class="timeline__body">{body}</p></li>"#,
+            r#"<li class="timeline__item" data-stage="{stage}">{pill} <span class="timeline__time">{ago}</span><p class="timeline__body">{body}</p></li>"#,
             pill = incident_status_pill_l(loc, &u.status),
+            stage = esc(&u.status),
             ago = esc(&rel_time_l(loc, u.created_at, now)),
             body = esc(&u.body),
         ));
@@ -1055,7 +1105,7 @@ fn render_timeline(
         i18n::t(loc, "status.incident.reported")
     };
     items.push_str(&format!(
-        r#"<li class="timeline__item"><span class="pill pill-state">{reported}</span> <span class="timeline__time">{ago}</span><p class="timeline__body">{body}</p></li>"#,
+        r#"<li class="timeline__item" data-stage="reported"><span class="pill pill-state">{reported}</span> <span class="timeline__time">{ago}</span><p class="timeline__body">{body}</p></li>"#,
         reported = esc(reported_label),
         ago = esc(&rel_time_l(loc, inc.created_at, now)),
         body = esc(&inc.body),
@@ -1075,23 +1125,34 @@ fn render_timeline(
     )
 }
 
-fn render_affected_l(loc: odyssey::Locale, affected: &str) -> String {
+/// Affected components as chips carrying each component's CURRENT state mark (looked up from the
+/// projected catalog, so an incident cannot claim a state the probes do not show).
+fn render_chips(view: &StatusView, affected: &str) -> String {
     let names = affected_names(affected);
     if names.is_empty() {
         return String::new();
     }
-    let pills: String = names
+    let chips: String = names
         .iter()
-        .map(|n| format!(r#"<span class="pill pill-state">{}</span>"#, esc(n)))
+        .map(|n| {
+            let state = view
+                .components
+                .iter()
+                .find(|c| c.name == *n)
+                .map(tile_state)
+                .unwrap_or("operational");
+            format!(
+                r#"<span class="chip chip--{state}">{mark}{name}</span>"#,
+                mark = mark(state, "sm"),
+                name = esc(n)
+            )
+        })
         .collect();
-    format!(
-        r#"<div class="affected">{}{pills}</div>"#,
-        esc(i18n::t(loc, "status.affects"))
-    )
+    format!(r#"<div class="chips">{chips}</div>"#)
 }
 
-/// The "Active incidents" ledger above the evidence summary and components — one entry per
-/// non-resolved incident. Empty string (section omitted) when everything is resolved.
+/// The "Active incidents" ledger — one entry per non-resolved incident. Empty string (section
+/// omitted) when everything is resolved.
 fn render_active_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     let active: Vec<&Incident> = view
         .incidents
@@ -1102,7 +1163,7 @@ fn render_active_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) ->
         return String::new();
     }
     let mut out = format!(
-        r#"<h2 class="section-title">{}</h2>"#,
+        r#"<section class="ledger" id="active-incidents"><h2 class="ledger__title">{}</h2>"#,
         esc(i18n::t(loc, "status.active"))
     );
     for inc in active {
@@ -1124,39 +1185,42 @@ fn render_active_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) ->
             )
         };
         out.push_str(&format!(
-            r#"<section class="card incident-card sev-{sev}"><div class="card__body"><article class="incident">
-  <div class="incident__head"><h3 class="incident__title">{title}</h3><span class="incident__pills">{sev_pill}{status_pill}</span></div>
-  {affected}
+            r#"<article class="incident incident--{sev}">
+  <div class="incident__head"><h3 class="incident__title">{title}</h3>{sev_pill}</div>
+  {stages}
+  {chips}
   <p class="incident__body">{latest}</p>
-  <div class="incident__time">{time_line}</div>
+  <p class="incident__time">{time_line}</p>
   {timeline}
-</article></div></section>"#,
+</article>"#,
             sev = esc(&inc.severity),
             title = esc(&inc.title),
             sev_pill = severity_pill_l(loc, &inc.severity),
-            status_pill = incident_status_pill_l(loc, &inc.status),
-            affected = render_affected_l(loc, &inc.affected),
+            stages = render_stage_track(loc, &inc.status),
+            chips = render_chips(view, &inc.affected),
             latest = esc(latest),
             time_line = esc(&time_line),
             timeline = render_timeline(inc, &updates, now, loc),
         ));
     }
+    out.push_str("</section>");
     out
 }
 
-/// Upcoming/ongoing maintenance windows as info-tinted cards. Empty string when none.
+/// Upcoming/ongoing maintenance windows. Empty string when none.
 fn render_maintenances(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
     if view.maintenances.is_empty() {
         return String::new();
     }
     let mut out = format!(
-        r#"<h2 class="section-title">{}</h2>"#,
+        r#"<section class="ledger" id="maintenance"><h2 class="ledger__title">{}</h2>"#,
         esc(i18n::t(loc, "status.maintenance"))
     );
     for m in &view.maintenances {
-        // Surface a prominent countdown: ongoing windows show time-to-end, upcoming ones
+        // A prominent countdown value: ongoing windows show time-to-end, upcoming ones
         // time-to-start (upcoming/ongoing windows are the only ones on the public surface).
-        let (state_pill, countdown) = if maintenance_ongoing(m, now) {
+        let ongoing = maintenance_ongoing(m, now);
+        let (state_pill, countdown) = if ongoing {
             let label = if loc == odyssey::Locale::En {
                 "in progress"
             } else {
@@ -1170,7 +1234,7 @@ fn render_maintenances(view: &StatusView, now: i64, loc: odyssey::Locale) -> Str
             };
             (
                 format!(r#"<span class="pill pill-info">{}</span>"#, esc(label)),
-                format!(r#"<span class="countdown">{}</span>"#, esc(&cd)),
+                cd,
             )
         } else {
             let label = if loc == odyssey::Locale::En {
@@ -1186,50 +1250,48 @@ fn render_maintenances(view: &StatusView, now: i64, loc: odyssey::Locale) -> Str
             };
             (
                 format!(r#"<span class="pill pill-state">{}</span>"#, esc(label)),
-                format!(r#"<span class="countdown">{}</span>"#, esc(&cd)),
+                cd,
             )
         };
         out.push_str(&format!(
-            r#"<section class="card incident-card sev-maintenance"><div class="card__body"><article class="incident">
-  <div class="incident__head"><h3 class="incident__title">{title}</h3><span class="incident__pills">{state_pill}{countdown}</span></div>
-  {affected}
+            r#"<article class="incident incident--maintenance{live}">
+  <div class="incident__head">{mark}<h3 class="incident__title">{title}</h3>{state_pill}</div>
+  <div class="incident__timing"><span class="countdown">{countdown}</span><span class="window">{starts} → {ends}</span></div>
+  {chips}
   <p class="incident__body">{body}</p>
-  <div class="incident__time">{starts} → {ends}</div>
-</article></div></section>"#,
+</article>"#,
+            live = if ongoing { " is-live" } else { "" },
+            mark = mark("maintenance", "lg"),
             title = esc(&m.title),
-            state_pill = state_pill,
-            countdown = countdown,
-            affected = render_affected_l(loc, &m.affected),
-            body = esc(&m.body),
+            countdown = esc(&countdown),
             starts = esc(&fmt_datetime(m.starts_at)),
             ends = esc(&fmt_datetime(m.ends_at)),
+            chips = render_chips(view, &m.affected),
+            body = esc(&m.body),
         ));
     }
+    out.push_str("</section>");
     out
 }
 
-/// "Past incidents": only days with public incidents are rendered. A single all-clear row
-/// replaces fourteen repetitive empty buckets, keeping the incident evidence scannable.
-fn render_past_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
-    let mut out = String::new();
+/// "Past incidents": every RESOLVED public incident opened in the last 14 days, newest day
+/// first (active ones live in the ledger above). One all-clear row replaces fourteen empty
+/// buckets.
+fn render_history(view: &StatusView, now: i64, loc: odyssey::Locale) -> String {
+    let mut out = format!(
+        r##"<section class="history" id="past-incidents"><h2 class="history__title">{}</h2>"##,
+        esc(i18n::t(loc, "status.past"))
+    );
     let today = day_bucket(now);
-    let mut rendered_days = 0usize;
-    for offset in 0..14 {
+    let mut rendered = 0usize;
+    for offset in 0..HISTORY_DAYS {
         let day = today - offset;
-        let incidents: Vec<_> = view
+        for inc in view
             .incidents
             .iter()
-            .filter(|inc| day_bucket(inc.created_at) == day)
-            .collect();
-        if incidents.is_empty() {
-            continue;
-        }
-        rendered_days += 1;
-        out.push_str(&format!(
-            r#"<div class="day-group"><h3 class="day-group__date">{}</h3>"#,
-            esc(&fmt_date_l(loc, day * DAY_SECS)),
-        ));
-        for inc in incidents {
+            .filter(|inc| inc.status == "resolved" && day_bucket(inc.created_at) == day)
+        {
+            rendered += 1;
             let resolved = inc.status == "resolved";
             let opened_ago = rel_time_l(loc, inc.created_at, now);
             let mut when = if resolved && inc.resolved_at > 0 {
@@ -1259,12 +1321,17 @@ fn render_past_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> S
                 when.push_str(&lasted_text);
             }
             out.push_str(&format!(
-                r#"<article class="incident{muted}">
-  <div class="incident__head"><h3 class="incident__title">{title}</h3><span class="incident__pills">{sev_pill}{status_pill}</span></div>
-  <p class="incident__body">{body}</p>
-  <div class="incident__time">{when}</div>
+                r#"<article class="hrow{muted}">
+  <time class="hrow__date" datetime="{iso}">{date}</time>
+  <div class="hrow__main">
+    <div class="hrow__head"><h3 class="hrow__title">{title}</h3>{sev_pill}{status_pill}</div>
+    <p class="hrow__body">{body}</p>
+    <span class="hrow__times">{when}</span>
+  </div>
 </article>"#,
-                muted = if resolved { " incident--resolved" } else { "" },
+                muted = if resolved { " hrow--resolved" } else { "" },
+                iso = esc(&day_date(day)),
+                date = esc(&fmt_date_l(loc, day * DAY_SECS)),
                 title = esc(&inc.title),
                 sev_pill = severity_pill_l(loc, &inc.severity),
                 status_pill = incident_status_pill_l(loc, &inc.status),
@@ -1272,14 +1339,15 @@ fn render_past_incidents(view: &StatusView, now: i64, loc: odyssey::Locale) -> S
                 when = esc(&when),
             ));
         }
-        out.push_str("</div>");
     }
-    if rendered_days == 0 {
+    if rendered == 0 {
         out.push_str(&format!(
-            r#"<div class="bc-history-clear"><span class="empty__ok" aria-hidden="true"></span><p>{}</p></div>"#,
-            esc(i18n::t(loc, "status.none_history"))
+            r#"<div class="hclear">{mark}<span>{text}</span></div>"#,
+            mark = mark("operational", "md"),
+            text = esc(i18n::t(loc, "status.none_history"))
         ));
     }
+    out.push_str("</section>");
     out
 }
 
@@ -1290,88 +1358,8 @@ mod tests {
     use crate::vitals::InfraPublic;
     use odyssey::Locale;
 
-    /// Synthetic trailing "Other" section: ungrouped components when groups exist.
-    #[test]
-    fn render_status_live_with_trailing_other_section() {
-        let view = StatusView {
-            overall: "operational",
-            updated_at: 1700000000,
-            history_days: 30,
-            components: vec![
-                ComponentView {
-                    name: "Gateway".to_string(),
-                    kind: "http".to_string(),
-                    status: "operational",
-                    group_id: Some("g_core".to_string()),
-                    uptime_24h: 100.0,
-                    uptime_7d: 99.98,
-                    uptime_90d: 99.95,
-                    latency_ms: Some(42),
-                    latency_avg_ms: Some(38),
-                    latency_points: vec![],
-                    last_checked: Some(1700000000),
-                    days: vec![DayStat {
-                        date: "2023-11-14".to_string(),
-                        status: "ok",
-                        uptime: Some(100.0),
-                    }],
-                },
-                ComponentView {
-                    name: "Orphan".to_string(),
-                    kind: "http".to_string(),
-                    status: "operational",
-                    group_id: None,
-                    uptime_24h: 99.90,
-                    uptime_7d: 99.85,
-                    uptime_90d: 99.80,
-                    latency_ms: Some(55),
-                    latency_avg_ms: Some(50),
-                    latency_points: vec![],
-                    last_checked: Some(1700000000),
-                    days: vec![DayStat {
-                        date: "2023-11-14".to_string(),
-                        status: "ok",
-                        uptime: Some(100.0),
-                    }],
-                },
-            ],
-            groups: vec![GroupView {
-                id: "g_core".to_string(),
-                name: "Core".to_string(),
-                position: 0,
-                status: "operational",
-            }],
-            incidents: vec![],
-            updates: vec![],
-            maintenances: vec![],
-            infra: None,
-        };
-
-        let html = render_status_live(&view, 1700000000, Locale::En);
-
-        // Must render exactly two sections: the named group "Core" and the trailing "Other".
-        assert_eq!(
-            html.matches(r#"<details class="cgroup""#).count(),
-            2,
-            "one named group plus one trailing Other section"
-        );
-        assert!(
-            html.contains(r#"class="cgroup__name">Core"#),
-            "Core group present"
-        );
-        assert!(
-            html.contains(r#"class="cgroup__name">Other"#),
-            "trailing Other section present"
-        );
-        assert!(html.contains(r#"title="Gateway""#));
-        assert!(html.contains(r#"title="Orphan""#));
-    }
-
-    /// The trailing "Other" section label and the member counts localize with the page
-    /// (the catalog path always assigns a group id, so this is only reachable synthetically).
-    #[test]
-    fn render_status_live_localizes_the_trailing_other_section() {
-        let component = |name: &str, group_id: Option<&str>| ComponentView {
+    fn component(name: &str, group_id: Option<&str>) -> ComponentView {
+        ComponentView {
             name: name.to_string(),
             kind: "http".to_string(),
             status: "operational",
@@ -1388,80 +1376,180 @@ mod tests {
                 status: "ok",
                 uptime: Some(100.0),
             }],
-        };
-        let view = StatusView {
+        }
+    }
+
+    fn view(components: Vec<ComponentView>, groups: Vec<GroupView>) -> StatusView {
+        StatusView {
             overall: "operational",
             updated_at: 1700000000,
             history_days: 30,
-            components: vec![
+            components,
+            groups,
+            incidents: vec![],
+            updates: vec![],
+            maintenances: vec![],
+            infra: None,
+        }
+    }
+
+    /// Synthetic trailing "Other" section: ungrouped components when groups exist.
+    #[test]
+    fn render_status_live_with_trailing_other_section() {
+        let view = view(
+            vec![
                 component("Gateway", Some("g_core")),
                 component("Orphan", None),
             ],
-            groups: vec![GroupView {
+            vec![GroupView {
                 id: "g_core".to_string(),
                 name: "Core".to_string(),
                 position: 0,
                 status: "operational",
             }],
-            incidents: vec![],
-            updates: vec![],
-            maintenances: vec![],
-            infra: None,
-        };
+        );
+
+        let html = render_status_live(&view, 1700000000, Locale::En);
+
+        assert_eq!(
+            html.matches(r#"<section class="group group-"#).count(),
+            2,
+            "one named group plus one trailing Other section"
+        );
+        assert!(html.contains(r#"<h2 class="group__name">Core</h2>"#));
+        assert!(html.contains(r#"<h2 class="group__name">Other</h2>"#));
+        assert!(html.contains(r#"<span class="tile__name">Gateway</span>"#));
+        assert!(html.contains(r#"<span class="tile__name">Orphan</span>"#));
+        // An all-operational catalog never repeats the state word on tiles or groups.
+        assert!(!html.contains(r#"class="tile__state""#));
+        assert!(!html.contains(r#"class="group__state""#));
+    }
+
+    /// The trailing "Other" section label localizes with the page.
+    #[test]
+    fn render_status_live_localizes_the_trailing_other_section() {
+        let view = view(
+            vec![
+                component("Gateway", Some("g_core")),
+                component("Orphan", None),
+            ],
+            vec![GroupView {
+                id: "g_core".to_string(),
+                name: "Core".to_string(),
+                position: 0,
+                status: "operational",
+            }],
+        );
 
         let zh = render_status_live(&view, 1700000000, Locale::Zh);
         assert!(
-            zh.contains(r#"class="cgroup__name">其他"#),
+            zh.contains(r#"<h2 class="group__name">其他</h2>"#),
             "zh Other label"
         );
-        assert!(
-            zh.contains(r#"<span class="cgroup__count">1 个组件</span>"#),
-            "zh member count"
-        );
-        assert!(
-            !zh.contains(r#"class="cgroup__name">Other"#),
-            "no English Other on the zh page"
-        );
+        assert!(!zh.contains(r#"<h2 class="group__name">Other</h2>"#));
+        assert!(zh.contains("30 天"), "zh evidence window value");
 
         let ja = render_status_live(&view, 1700000000, Locale::Ja);
         assert!(
-            ja.contains(r#"class="cgroup__name">その他"#),
+            ja.contains(r#"<h2 class="group__name">その他</h2>"#),
             "ja Other label"
         );
+    }
+
+    /// A never-probed component reads pending: dash mark, no uptime value, explicit state word.
+    #[test]
+    fn pending_component_never_claims_operational_evidence() {
+        let mut pending = component("Wiki", None);
+        pending.last_checked = None;
+        pending.days = vec![DayStat {
+            date: "2023-11-14".to_string(),
+            status: "unknown",
+            uptime: None,
+        }];
+        let html = render_status_live(&view(vec![pending], vec![]), 1700000000, Locale::En);
+        assert!(html.contains(r#"<details class="tile tile--pending" name="tile">"#));
+        assert!(html.contains(r#"<span class="tile__state">Awaiting first check</span>"#));
+        assert!(html.contains(r#"class="cell cell--unknown""#));
         assert!(
-            ja.contains(r#"<span class="cgroup__count">コンポーネント 1 件</span>"#),
-            "ja member count"
+            !html.contains(r#"class="mast__uptime""#),
+            "no evidence-window average before the first check"
         );
+    }
+
+    /// The estate strip takes the worst state per day across components.
+    #[test]
+    fn estate_strip_takes_the_worst_state_per_day() {
+        let mut a = component("A", None);
+        let mut b = component("B", None);
+        a.days = vec![
+            DayStat {
+                date: "2023-11-13".to_string(),
+                status: "ok",
+                uptime: Some(100.0),
+            },
+            DayStat {
+                date: "2023-11-14".to_string(),
+                status: "warn",
+                uptime: Some(98.0),
+            },
+        ];
+        b.days = vec![
+            DayStat {
+                date: "2023-11-13".to_string(),
+                status: "down",
+                uptime: Some(40.0),
+            },
+            DayStat {
+                date: "2023-11-14".to_string(),
+                status: "ok",
+                uptime: Some(100.0),
+            },
+        ];
+        let html = render_status_live(&view(vec![a, b], vec![]), 1700000000, Locale::En);
+        let estate_start = html.find(r#"<section class="estate">"#).unwrap();
+        let estate =
+            &html[estate_start..html[estate_start..].find("</section>").unwrap() + estate_start];
+        assert!(estate.contains(
+            r#"<span class="cell cell--down" data-date="2023-11-13" data-uptime="70.00%""#
+        ));
+        assert!(estate.contains(
+            r#"<span class="cell cell--warn" data-date="2023-11-14" data-uptime="99.00%""#
+        ));
     }
 
     /// Synthetic infra block without a live vitals poller.
     #[test]
     fn render_status_live_with_synthetic_infra() {
-        let view = StatusView {
-            overall: "operational",
-            updated_at: 1700000000,
-            history_days: 30,
-            components: vec![],
-            groups: vec![],
-            incidents: vec![],
-            updates: vec![],
-            maintenances: vec![],
-            infra: Some(InfraPublic {
-                overall: "ok",
-                bands: vec![],
-                trend: vec!["ok"; 24],
-            }),
-        };
+        let mut v = view(vec![], vec![]);
+        v.infra = Some(InfraPublic {
+            overall: "ok",
+            bands: vec![],
+            trend: vec!["ok"; 24],
+        });
 
-        let html = render_status_live(&view, 1700000000, Locale::En);
+        let html = render_status_live(&v, 1700000000, Locale::En);
 
         assert!(
-            html.contains(r#"class="card bc-infra""#),
+            html.contains(r#"<section class="infra">"#),
             "infra section renders when present"
         );
-        assert!(
-            html.contains(r#"class="bc-infra__trend""#),
-            "24-hour trend present"
+        assert_eq!(
+            html.matches(r#"class="heat__cell heat__cell--ok""#).count(),
+            24
         );
+        assert!(html.contains("<span>24h ago</span><span>12h ago</span><span>Now</span>"));
+    }
+
+    /// The stage track marks exactly one current stage and turns green once resolved.
+    #[test]
+    fn stage_track_marks_the_current_stage() {
+        let html = render_stage_track(Locale::En, "identified");
+        assert_eq!(html.matches(r#"aria-current="step""#).count(), 1);
+        assert!(html.contains(r#"<span class="stage stage--done"><span class="stage__dot" aria-hidden="true"></span><span class="stage__label">Investigating</span></span>"#));
+        assert!(html.contains(r#"<span class="stage stage--now" aria-current="step"><span class="stage__dot" aria-hidden="true"></span><span class="stage__label">Identified</span></span>"#));
+        assert!(!html.contains("stages--resolved"));
+        let resolved = render_stage_track(Locale::Ja, "resolved");
+        assert!(resolved.starts_with(r#"<div class="stages stages--resolved""#));
+        assert!(resolved.contains("解決済み"));
     }
 }

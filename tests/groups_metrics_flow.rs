@@ -34,29 +34,23 @@ fn text(bytes: &[u8]) -> String {
 }
 
 #[tokio::test]
-async fn operational_catalog_opens_exactly_the_first_group() {
+async fn operational_catalog_renders_one_group_of_tiles() {
     let state = build_dev_state().await;
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK);
     let html = text(&body);
 
-    // The disclosure model always presents exactly one open fold: with every rollup
-    // operational the first (and here only) catalog group is the focus.
+    // The catalog-owned Core group renders as one section with two component tiles and no
+    // member count.
     assert_eq!(
-        html.matches(r#"<details class="cgroup""#).count(),
+        html.matches(r#"<section class="group group--"#).count(),
         1,
-        "the single catalog group renders one native disclosure"
+        "the single catalog group renders one section"
     );
-    assert_eq!(
-        html.matches(r#"<details class="cgroup" open>"#).count(),
-        1,
-        "exactly one disclosure starts open on an all-operational page"
-    );
-    assert!(
-        html.contains(r#"class="cgroup__name">Core"#),
-        "the open fold is the first catalog group"
-    );
-    assert!(html.contains(r#"class="cgroup__count">2 components"#));
+    assert!(html.contains(r#"<h2 class="group__name">Core</h2>"#));
+    assert_eq!(html.matches(r#"<details class="tile tile--"#).count(), 2);
+    assert!(!html.contains("2 components"));
+    assert!(!html.contains(r#"class="group__state""#));
 }
 
 fn post_admin(uri: &str, form: &str) -> Request<Body> {
@@ -72,7 +66,7 @@ fn post_admin(uri: &str, form: &str) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn groups_render_sections_with_rollup_pill() {
+async fn groups_render_sections_with_the_worst_member_rollup() {
     let state = build_dev_state().await; // seeds Gateway, Identity, CA.
 
     // Create a raw database group and place the internal CA probe in it. This must not affect
@@ -116,19 +110,19 @@ async fn groups_render_sections_with_rollup_pill() {
     assert_eq!(status, StatusCode::OK);
     let html = text(&body);
     assert!(
-        html.contains(r#"class="cgroup__name">Core"#),
-        "catalog-owned Core section header"
+        html.contains(r#"<section class="group group--down">"#),
+        "catalog-owned Core section carries the worst-member rollup"
     );
+    assert!(html.contains(r#"<h2 class="group__name">Core</h2>"#));
+    assert!(html.contains(r#"<span class="group__state">Down</span>"#));
     assert!(!html.contains("Secret operators"));
-    assert!(!html.contains(r#"title="CA""#));
-    assert!(
-        html.contains(r#"<details class="cgroup" open>"#),
-        "non-operational group starts open"
-    );
-    // The Apps rollup pill is Down (worst of a down + an up member).
-    assert!(
-        html.contains(r#"<span class="pill pill-down">Down</span>"#),
-        "group rollup pill down"
+    assert!(!html.contains(r#"<span class="tile__name">CA</span>"#));
+    assert!(html.contains(r#"<details class="tile tile--down" name="tile">"#));
+    assert!(html.contains(r#"<details class="tile tile--operational" name="tile">"#));
+    assert_eq!(
+        html.matches(r#"<span class="tile__state">Down</span>"#).count(),
+        1,
+        "only the down tile carries a state word"
     );
 
     // JSON API: groups array present with the rollup, components carry their group_id.
@@ -190,12 +184,15 @@ async fn latency_aggregate_drives_sparkline() {
     assert_eq!(points[22], 30, "previous hour mean");
     assert!(points[0].is_null(), "oldest hour has no data");
 
-    // HTML: the compact component row renders the window average and keeps sparkline data in JSON.
+    // HTML: the tile face shows the window average; the tile detail carries the hourly spark.
     let (_, body) = call(&state, get("/status")).await;
     let html = text(&body);
-    assert!(html.contains(r#"class="crow__lat" title="24h average · latest 30 ms">~23 ms"#));
+    assert!(html.contains(
+        r#"<span class="tile__lat" title="24h average · latest 30 ms">~23 ms</span>"#
+    ));
     assert!(
-        !html.contains(r#"<svg class="spark""#),
-        "sparkline SVG removed from status HTML"
+        html.contains(r#"<svg class="spark" viewBox="0 0 200 40""#),
+        "the 24-hour latency spark renders inside the tile detail"
     );
+    assert!(html.contains(r#"<b>~23 ms</b><small>24h average · latest 30 ms</small>"#));
 }

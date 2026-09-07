@@ -3,7 +3,8 @@
 //! `health` is the unauthenticated liveness probe; `status` carries the PUBLIC status page
 //! and JSON API; `admin` carries the SSO-gated operator dashboard + incident posting.
 //!
-//! Odyssey canonical CSS plus Beacon service CSS are embedded and inlined into every page.
+//! Odyssey canonical CSS plus Beacon service CSS are embedded and served as one immutable,
+//! versioned stylesheet.
 
 pub mod admin;
 pub mod feed;
@@ -13,15 +14,19 @@ pub mod subscriptions;
 
 use std::sync::OnceLock;
 
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap, HeaderValue};
+use axum::response::IntoResponse;
 
 /// Beacon-only CSS layered after Odyssey's canonical font, tokens, and components.
 pub const SERVICE_CSS: &str = include_str!("../../static/service.css");
 
+/// Versioned stylesheet URL. Change the date whenever the embedded CSS changes.
+pub const APP_CSS_PATH: &str = "/assets/beacon-20260907.css";
+
 static APP_CSS: OnceLock<String> = OnceLock::new();
 static DYNAMIC_JS: OnceLock<String> = OnceLock::new();
 
-/// Embedded design system, inlined into each rendered page's `<style>`.
+/// Embedded design system assembled once per process.
 pub fn app_css() -> &'static str {
     APP_CSS
         .get_or_init(|| {
@@ -31,6 +36,23 @@ pub fn app_css() -> &'static str {
             css
         })
         .as_str()
+}
+
+/// Shared public stylesheet with an immutable one-year cache policy.
+pub async fn app_css_asset() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/css; charset=utf-8"),
+            ),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            ),
+        ],
+        app_css(),
+    )
 }
 
 /// Embedded Odyssey dynamic layer for progressively enhanced public and admin surfaces.

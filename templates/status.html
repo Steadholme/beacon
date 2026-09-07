@@ -2,16 +2,16 @@
 <html lang="{{LANG}}"{{THEME}} data-ody-profile="public">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="{{COLOR_SCHEME}}">
-  <meta name="description" content="Live availability of the Steadholme sovereign infrastructure.">
+  <meta name="description" content="Live Steadholme service status.">
   <meta http-equiv="refresh" content="300">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' fill='none'%3E%3Cpath stroke='%23b6422c' stroke-width='3' d='M24 4 8 9.5V22c0 11 7 17.4 16 21.5C33 39.4 40 33 40 22V9.5L24 4Z'/%3E%3C/svg%3E">
   <link rel="alternate" type="application/rss+xml" href="/feed.xml">
   <title>Status · Steadholme</title>
-  <style>{{CSS}}</style>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
 </head>
-<body class="page-console" data-ody-shell="1.2">
+<body class="page-console page-status" data-ody-shell="1.3">
   <a class="skip-link" href="#status-main">{{SKIP_TO_STATUS}}</a>
   <header class="topbar">
     <div class="topbar__inner">
@@ -20,42 +20,22 @@
         <span class="brand__word">Steadholme</span>
       </a>
       <div class="topbar__right">
-        {{THEMESWITCH}}
-        {{USERBOX}}
+        {{CLOCK}}
         {{LANGSWITCH}}
+        {{THEMESWITCH}}
+        {{UPDATES}}
       </div>
     </div>
   </header>
 
   <main class="console" id="status-main" tabindex="-1" aria-labelledby="status-title">
-    <div class="console__head statushead">
-      <div class="statushead__text">
-        <h1 id="status-title">{{STATUS_TITLE}}</h1>
-        <p class="sub">{{STATUS_SUB}}</p>
-      </div>
-      <div class="statushead__actions">
-        {{PUBLIC_SIGNAL}}
-        {{REFRESH}}
-        <details class="updates-pop">
-          <summary class="btn btn-secondary updates-pop__btn">{{GET_UPDATES}}</summary>
-          <nav class="updates-pop__menu">
-            {{WEBHOOK_LINK}}
-            <a class="updates-pop__item" href="/feed.xml">{{RSS_FEED}}</a>
-            <a class="updates-pop__item" href="/api/status">{{JSON_API}}</a>
-          </nav>
-        </details>
-      </div>
-    </div>
-
     {{STATUS_LIVE}}
 
-    {{SUBSCRIBE}}
+    {{CHANNELS}}
   </main>
 
-  <footer class="site-foot">
-    <span>{{FOOTER}}</span>
-    <span class="site-foot__links"><a href="/feed.xml">{{RSS}}</a> · <a href="/api/status">{{JSON_API}}</a> · {{UPDATED_LABEL}}</span>
-  </footer>
+  {{FOOT}}
   {{SCRIPTS}}
+  <script>{{PAGE_JS}}</script>
 </body>
 </html>

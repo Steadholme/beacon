@@ -92,47 +92,66 @@ async fn public_status_renders_without_auth() {
     assert!(html.contains(
         r#"<main class="console" id="status-main" tabindex="-1" aria-labelledby="status-title">"#
     ));
+    assert!(html.contains(r#"content="width=device-width, initial-scale=1, viewport-fit=cover""#));
+    assert!(html.contains(r#"<body class="page-console page-status" data-ody-shell="1.3">"#));
+    assert!(html.contains("beacon status-page v1"), "page script embedded");
+    assert!(
+        html.contains(r#"<time class="clock" datetime=""#) && html.contains(" UTC</time>"),
+        "UTC clock value in the app bar"
+    );
+    assert!(
+        !html.contains("status-stage") && !html.contains("status-window"),
+        "the fixed reading window is retired"
+    );
     assert!(html.contains("Steadholme"), "brand present");
-    assert!(html.contains("System status"), "page heading present");
+    // The state IS the heading: no "System status" title, no operational-snapshot counts,
+    // no repeated state words on an all-nominal page.
+    assert!(html.contains(
+        r#"<h1 id="status-title" class="mast__headline">All systems operational</h1>"#
+    ));
+    assert!(html.contains(r#"<section class="mast mast--operational">"#));
+    assert!(!html.contains("System status"));
+    assert!(!html.contains("bc-snapshot"));
+    assert!(!html.contains("monitored"));
+    assert!(!html.contains("components</span>"));
+    assert!(!html.contains("statushead__signal"));
+    assert!(!html.contains("sovereign infrastructure"));
     // The fail-safe public catalog shows only explicitly listed components. CA remains an
     // internal raw probe even though it is present in the default seed.
-    assert!(html.contains("Gateway"));
-    assert!(html.contains("Identity"));
-    assert!(!html.contains(r#"title="CA""#));
-    // No data yet -> nominal banner, no active-incident section, no maintenance section.
-    assert!(html.contains("All systems operational"));
+    assert!(html.contains(r#"<span class="tile__name">Gateway</span>"#));
+    assert!(html.contains(r#"<span class="tile__name">Identity</span>"#));
+    assert!(!html.contains(r#"<span class="tile__name">CA</span>"#));
+    assert_eq!(html.matches(r#"<details class="tile tile--"#).count(), 2);
+    // No data yet -> pending tiles, no evidence average, no active-incident section.
+    assert_eq!(
+        html.matches(r#"<details class="tile tile--pending" name="tile">"#).count(),
+        2
+    );
     assert!(
-        !html.contains(r#"<span class="status-hero__uptime""#),
+        !html.contains(r#"class="mast__uptime""#),
         "no nominal evidence-window average before first check"
     );
     assert!(!html.contains("Active incidents"));
-    assert!(html.contains("Past incidents"));
-    assert!(html.contains("No incidents reported in the last 14 days."));
-    assert_eq!(html.matches(r#"class="day-group""#).count(), 0);
-    assert!(html.contains(r#"class="bc-snapshot""#));
-    assert!(html.contains(r#"class="status-hero__mark status-hero__mark--ok""#));
-    assert!(html.contains(r#"class="card status-components""#));
-    assert!(html.contains(r#"class="crow__track" role="img" aria-label="Gateway"#));
-    assert!(html.contains(r#"<span class="card__head-meta">2 monitored</span>"#));
-    assert!(!html.contains(r#"action="/subscriptions""#));
-    assert!(html.contains("Webhook registration is currently unavailable"));
-    // Inlined CSS (embedded design system).
-    assert!(
-        html.contains("--accent:var(--c-oxide-600)")
-            && html.contains("--surface-etched:")
-            && html.contains("background-size:48px 48px"),
-        "current Odyssey Sovereign Atlas tokens and material are inlined"
-    );
-    // Public payload carries 30 days for two explicitly projected components.
-    assert_eq!(html.matches(r#"class="bar bar-unknown""#).count(), 60);
+    assert!(html.contains(r#"<h2 class="history__title">Past incidents</h2>"#));
+    assert!(html.contains("No incidents in the last 14 days"));
+    assert!(html.contains(r#"<section class="catalog" aria-label="Components">"#));
+    assert!(html.contains(r#"<section class="estate">"#));
+    // Estate strip (30) + two mini strips (60) + two detail strips (60) of unknown days.
+    assert_eq!(html.matches(r#"class="cell cell--unknown""#).count(), 150);
     assert!(
         html.contains(r#"data-uptime="no data""#),
         "unknown days carry no-data metadata"
     );
     assert!(
         html.contains(r#"data-date=""#),
-        "bar dates render as data attributes"
+        "cell dates render as data attributes"
     );
+    // Channels are actions only; the webhook form stays off by default.
+    assert!(html.contains(r#"<section class="channels" id="subscribe">"#));
+    assert!(!html.contains(r#"action="/subscriptions""#));
+    assert!(!html.contains("Webhook registration"));
+    assert!(html.contains(r#"<link rel="stylesheet" href="/assets/beacon-20260907.css">"#));
+    assert!(!html.contains("<style>"), "shared CSS stays out of HTML");
 }
 
 #[tokio::test]
@@ -191,13 +210,14 @@ async fn public_wire_fragment_matches_the_full_ssr_live_region() {
     );
 
     let live_start = full.find(r#"<div id="status-live""#).unwrap();
-    let subscribe_start = full[live_start..]
-        .find("\n\n    <section class=\"card bc-channels\" id=\"subscribe\">")
+    let subscribe_id = full[live_start..]
+        .find(r#" id="subscribe">"#)
         .map(|offset| live_start + offset)
         .unwrap();
+    let subscribe_start = full[..subscribe_id].rfind("<section").unwrap();
     assert_eq!(
         fragment,
-        full[live_start..subscribe_start],
+        full[live_start..subscribe_start].trim_end(),
         "full and fragment responses must share one renderer"
     );
     assert!(fragment.starts_with(r#"<div id="status-live""#));
@@ -215,9 +235,9 @@ async fn public_refresh_keeps_a_complete_no_js_floor_and_declares_error_recovery
 
     assert!(html.starts_with("<!DOCTYPE html>"));
     assert!(html.contains(r#"data-ody-profile="public""#));
-    assert!(html.contains(r#"data-ody-shell="1.2""#));
+    assert!(html.contains(r#"data-ody-shell="1.3""#));
     assert!(html.contains(r#"<meta http-equiv="refresh" content="300">"#));
-    assert!(html.contains("Public · read only"));
+    assert!(!html.contains("Public · read only"));
     assert!(html.contains(r#"role="region" aria-label="Live system status""#));
     assert!(
         !html.contains(r#"aria-label="Live system status" aria-live="#),
@@ -225,7 +245,7 @@ async fn public_refresh_keeps_a_complete_no_js_floor_and_declares_error_recovery
     );
 
     let refresh_start = html
-        .find(r#"<a class="btn btn-secondary btn-sm" href="/status" role="button""#)
+        .find(r#"<a class="btn btn-ghost btn-sm" href="/status" role="button""#)
         .expect("typed Odyssey refresh link");
     let refresh_end = html[refresh_start..]
         .find("</a>")
@@ -459,7 +479,7 @@ async fn daily_bars_reflect_probe_results() {
     // The HTML page renders the same bars with date + percent metadata.
     let (_, body) = call(&state, get("/status")).await;
     let html = text(&body);
-    assert!(html.contains(r#"class="bar bar-down""#));
+    assert!(html.contains(r#"class="cell cell--down""#));
     assert!(
         html.contains(r#"data-uptime="75.00%""#),
         "bar metadata carries the day percent"
@@ -546,16 +566,23 @@ async fn incident_lifecycle_shows_on_public_status() {
     assert!(html.contains("Active incidents"), "active section renders");
     assert!(html.contains("Identity provider degraded"));
     assert!(html.contains("Investigating"), "status pill shows");
-    assert!(html.contains("sev-major"), "severity-tinted card");
+    assert!(
+        html.contains(r#"<article class="incident incident--major">"#),
+        "severity-railed card"
+    );
+    assert!(
+        html.contains(r#"<span class="stage stage--now" aria-current="step">"#),
+        "the stage track marks the current stage"
+    );
     assert!(
         html.contains("Partial degradation"),
         "major incident -> degraded banner"
     );
-    let snapshot = html.find(r#"class="bc-snapshot""#).unwrap();
+    let estate = html.find(r#"<section class="estate">"#).unwrap();
     let active = html.find("Active incidents").unwrap();
     assert!(
-        snapshot < active,
-        "snapshot precedes active incidents in new order"
+        estate < active,
+        "the estate strip precedes the active ledger"
     );
 
     // And in the JSON API.
@@ -607,7 +634,7 @@ async fn incident_lifecycle_shows_on_public_status() {
         "resolved -> banner clears"
     );
     assert!(!html.contains("Active incidents"), "active section gone");
-    assert!(html.contains("incident--resolved"), "past incident muted");
+    assert!(html.contains("hrow--resolved"), "past incident muted");
     assert!(html.contains("Resolved"), "resolved pill in past section");
 
     // Updating an unknown incident is a 400.
@@ -1065,7 +1092,7 @@ async fn empty_incident_title_rejected() {
 }
 
 /// Served-CSS regression guard: the operator desk layer is a `.bc-desk`/`.bc-slate`-scoped
-/// block tail-appended after the byte-stable publication baseline. `app_css()` inlines
+/// block tail-appended after the byte-stable publication baseline. `app_css()` assembles
 /// unlayered Odyssey CSS before `service.css`, so wrapping service CSS in a named `@layer`
 /// demotes every Beacon override below Odyssey. If cascade layers are ever introduced
 /// legitimately, the same stylesheet must first declare the `@layer odyssey, beacon;`
@@ -1073,18 +1100,36 @@ async fn empty_incident_title_rejected() {
 #[tokio::test]
 async fn service_css_stays_unlayered_and_keeps_shared_chrome() {
     let state = build_dev_state().await;
+    let css_response = app(state.clone())
+        .oneshot(get("/assets/beacon-20260907.css"))
+        .await
+        .unwrap();
+    assert_eq!(css_response.status(), StatusCode::OK);
+    assert_eq!(
+        css_response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(
+        css_response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "text/css; charset=utf-8"
+    );
+    let css = text(
+        &axum::body::to_bytes(css_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    );
     let (status, body) = call(&state, get("/status")).await;
     assert_eq!(status, StatusCode::OK);
     let html = text(&body);
 
-    // Cascade guard: the served document carries no cascade layer.
-    assert!(!html.contains("@layer"), "service CSS stays unlayered");
+    // Cascade guard: the served stylesheet carries no cascade layer.
+    assert!(!css.contains("@layer"), "service CSS stays unlayered");
 
     // Menu guard: the public updates menu stays native-<details> driven. The `open`
     // attribute lives on <details>, never on the <nav>, so an author rule keyed on
     // `.updates-pop__menu[open]` pins the menu shut.
     assert!(
-        !html.contains(".updates-pop__menu[open]"),
+        !css.contains(".updates-pop__menu[open]"),
         "no author rule may key the updates menu on [open]"
     );
     assert!(
@@ -1092,34 +1137,31 @@ async fn service_css_stays_unlayered_and_keeps_shared_chrome() {
         "updates menu markup stays a native <details>"
     );
     assert!(
-        html.contains(".updates-pop__btn::-webkit-details-marker"),
+        css.contains(".updates-pop__btn::-webkit-details-marker"),
         "baseline marker-hiding rule for the native summary stays served"
     );
 
     // Chrome guard: the topbar chrome actually emitted by `userbox()` keeps its base
     // rules; the orphan `.userbox*` family stays gone.
     assert!(
-        html.contains(".userchip {"),
+        css.contains(".userchip {"),
         "userchip base rule stays served"
     );
     assert!(
-        html.contains(".userchip__avatar {"),
+        css.contains(".userchip__avatar {"),
         "userchip avatar base rule stays served"
     );
+    assert!(css.contains(".allapps {"), "allapps base rule stays served");
     assert!(
-        html.contains(".allapps {"),
-        "allapps base rule stays served"
-    );
-    assert!(
-        !html.contains(".userbox {"),
+        !css.contains(".userbox {"),
         "orphan .userbox rules stay gone"
     );
 
     // Order guard: the desk layer stays appended after the publication layer.
-    let publication = html
+    let publication = css
         .find("Public status · Beacon publication layer")
         .expect("publication layer marker present");
-    let desk = html
+    let desk = css
         .find("Operator desk layer")
         .expect("operator desk layer marker present");
     assert!(
@@ -1148,22 +1190,23 @@ fn two_group_config() -> Config {
     config
 }
 
-/// Ordered `(section name, starts open)` pairs for every rendered category disclosure.
-fn section_states(html: &str) -> Vec<(String, bool)> {
-    let name_marker = r#"class="cgroup__name">"#;
-    html.split(r#"<details class="cgroup""#)
+/// Ordered `(group name, rollup state)` pairs for every rendered catalog group.
+fn group_states(html: &str) -> Vec<(String, String)> {
+    let name_marker = r#"<h2 class="group__name">"#;
+    html.split(r#"<section class="group group--"#)
         .skip(1)
         .map(|chunk| {
-            let start = chunk.find(name_marker).expect("cgroup name") + name_marker.len();
-            let end = chunk[start..].find('<').expect("cgroup name close") + start;
-            (chunk[start..end].to_string(), chunk.starts_with(" open>"))
+            let state_end = chunk.find('"').expect("group state");
+            let start = chunk.find(name_marker).expect("group name") + name_marker.len();
+            let end = chunk[start..].find('<').expect("group name close") + start;
+            (chunk[start..end].to_string(), chunk[..state_end].to_string())
         })
         .collect()
 }
 
 #[tokio::test]
-async fn all_operational_opens_exactly_the_first_section() {
-    // Single-group dev catalog: the lone Core section is the focus even when healthy.
+async fn all_operational_catalog_shows_no_state_words() {
+    // Single-group dev catalog: nothing on the page repeats "Operational".
     let state = build_dev_state().await;
     let now = now_secs();
     state
@@ -1179,12 +1222,23 @@ async fn all_operational_opens_exactly_the_first_section() {
     let html = text(&body);
     assert!(html.contains("All systems operational"));
     assert_eq!(
-        section_states(&html),
-        vec![("Core".to_string(), true)],
-        "an all-operational page still opens its first (only) section"
+        group_states(&html),
+        vec![("Core".to_string(), "operational".to_string())]
+    );
+    assert!(
+        !html.contains(r#"class="group__state""#),
+        "no group state word when every rollup is operational"
+    );
+    assert!(
+        !html.contains(r#"class="tile__state""#),
+        "no tile state word on an all-operational page"
+    );
+    assert_eq!(
+        html.matches(r#"<details class="tile tile--operational" name="tile">"#).count(),
+        2
     );
 
-    // Multi-group catalog: the first section wins the all-operational focus.
+    // Multi-group catalog: configuration order, no affected line.
     let state = state_with(two_group_config()).await;
     state
         .store
@@ -1197,17 +1251,21 @@ async fn all_operational_opens_exactly_the_first_section() {
     let (_, body) = call(&state, get("/status")).await;
     let html = text(&body);
     assert_eq!(
-        section_states(&html),
-        vec![("Edge".to_string(), true), ("Accounts".to_string(), false)]
+        group_states(&html),
+        vec![
+            ("Edge".to_string(), "operational".to_string()),
+            ("Accounts".to_string(), "operational".to_string())
+        ],
+        "catalog order is configuration order"
     );
     assert!(
-        !html.contains(r#"class="status-hero__affected""#),
+        !html.contains(r#"class="mast__affected""#),
         "an all-operational page never shows the affected line"
     );
 }
 
 #[tokio::test]
-async fn down_section_beats_an_earlier_degraded_section() {
+async fn group_rollups_follow_the_worst_member() {
     let state = state_with(two_group_config()).await;
     let now = now_secs();
     // Edge/Gateway: one failure inside the 24h window with a healthy latest probe -> degraded.
@@ -1226,19 +1284,28 @@ async fn down_section_beats_an_earlier_degraded_section() {
         .await;
 
     let (_, body) = call(&state, get("/status")).await;
+    let html = text(&body);
     assert_eq!(
-        section_states(&text(&body)),
-        vec![("Edge".to_string(), false), ("Accounts".to_string(), true)],
-        "rank strict-max: a later down section outranks an earlier degraded one"
+        group_states(&html),
+        vec![
+            ("Edge".to_string(), "degraded".to_string()),
+            ("Accounts".to_string(), "down".to_string())
+        ]
     );
+    assert!(html.contains(r#"<span class="group__state">Degraded</span>"#));
+    assert!(html.contains(r#"<span class="group__state">Down</span>"#));
+    assert!(html.contains(r#"<details class="tile tile--degraded" name="tile">"#));
+    assert!(html.contains(r#"<details class="tile tile--down" name="tile">"#));
+    assert!(html.contains(r#"<span class="tile__state">Degraded</span>"#));
+    assert!(html.contains(r#"<span class="tile__state">Down</span>"#));
+    assert!(html.contains("2 of 2 components affected"));
 }
 
 #[tokio::test]
-async fn degraded_section_beats_an_earlier_maintenance_section() {
+async fn maintenance_masks_the_group_and_the_tile() {
     let state = state_with(two_group_config()).await;
     let now = now_secs();
-    // An ongoing window masks Gateway, so the Edge rollup reads "maintenance". With nothing
-    // else non-operational the maintenance fold itself is the focus.
+    // An ongoing window masks Gateway, so the Edge rollup reads "maintenance".
     state
         .store
         .insert_maintenance(&Maintenance {
@@ -1251,14 +1318,24 @@ async fn degraded_section_beats_an_earlier_maintenance_section() {
         })
         .await;
     let (_, body) = call(&state, get("/status")).await;
+    let html = text(&body);
     assert_eq!(
-        section_states(&text(&body)),
-        vec![("Edge".to_string(), true), ("Accounts".to_string(), false)],
-        "a maintenance rollup outranks operational sections"
+        group_states(&html),
+        vec![
+            ("Edge".to_string(), "maintenance".to_string()),
+            ("Accounts".to_string(), "operational".to_string())
+        ]
+    );
+    assert!(html.contains(r#"<details class="tile tile--maintenance" name="tile">"#));
+    assert!(html.contains(r#"<span class="tile__state">Maintenance</span>"#));
+    assert!(html.contains(r#"<article class="incident incident--maintenance is-live">"#));
+    assert!(
+        html.contains(r#"<span class="chip chip--maintenance">"#),
+        "affected chips carry the component's masked state"
     );
 
-    // Identity degrades (failure in the window, healthy latest probe): degraded outranks
-    // the earlier maintenance fold and takes the focus from it.
+    // Identity degrades (failure in the window, healthy latest probe): its own group reads
+    // degraded while the masked group keeps reading maintenance.
     state
         .store
         .insert_result("Identity", false, 0, now - 900)
@@ -1269,13 +1346,16 @@ async fn degraded_section_beats_an_earlier_maintenance_section() {
         .await;
     let (_, body) = call(&state, get("/status")).await;
     assert_eq!(
-        section_states(&text(&body)),
-        vec![("Edge".to_string(), false), ("Accounts".to_string(), true)]
+        group_states(&text(&body)),
+        vec![
+            ("Edge".to_string(), "maintenance".to_string()),
+            ("Accounts".to_string(), "degraded".to_string())
+        ]
     );
 }
 
 #[tokio::test]
-async fn equal_rank_sections_keep_the_earliest_one_open() {
+async fn catalog_keeps_configuration_order_whatever_the_states() {
     let state = state_with(two_group_config()).await;
     let now = now_secs();
     state
@@ -1288,9 +1368,12 @@ async fn equal_rank_sections_keep_the_earliest_one_open() {
         .await;
     let (_, body) = call(&state, get("/status")).await;
     assert_eq!(
-        section_states(&text(&body)),
-        vec![("Edge".to_string(), true), ("Accounts".to_string(), false)],
-        "equal ranks keep first-wins ordering"
+        group_states(&text(&body)),
+        vec![
+            ("Edge".to_string(), "down".to_string()),
+            ("Accounts".to_string(), "down".to_string())
+        ],
+        "groups never reorder by state"
     );
 }
 
@@ -1310,7 +1393,7 @@ async fn affected_line_derives_from_component_states_without_incidents() {
     let (_, body) = call(&state, get("/status")).await;
     let html = text(&body);
     assert!(
-        html.contains(r#"<span class="status-hero__affected">"#),
+        html.contains(r#"<span class="mast__affected">"#),
         "affected line appears without any incident"
     );
     assert!(html.contains("1 of 2 components affected"));
@@ -1345,7 +1428,7 @@ async fn maintenance_masking_counts_toward_affected_without_an_incident() {
         .await;
     let (_, body) = call(&state, get("/status")).await;
     let html = text(&body);
-    assert!(html.contains(r#"<h2 class="section-title">Maintenance</h2>"#));
+    assert!(html.contains(r#"<h2 class="ledger__title">Maintenance</h2>"#));
     assert!(
         html.contains("1 of 2 components affected"),
         "a maintenance-masked component is not operational right now"
@@ -1406,7 +1489,7 @@ async fn incident_names_never_inflate_the_affected_line() {
         "internal-only incidents stay fail-closed off the public page"
     );
     assert!(
-        !html.contains(r#"class="status-hero__affected""#),
+        !html.contains(r#"class="mast__affected""#),
         "affected derives from component states, so incident name lists cannot inflate it"
     );
 }
@@ -1493,26 +1576,26 @@ async fn active_sits_before_maintenance_before_components_in_the_ia() {
     assert_eq!(status, StatusCode::OK);
     let html = text(&body);
 
-    let hero = html.find(r#"<section class="status-hero"#).expect("hero");
-    let snapshot = html
-        .find(r#"<section class="bc-snapshot""#)
-        .expect("snapshot strip");
+    let hero = html.find(r#"<section class="mast "#).expect("masthead");
+    let estate = html
+        .find(r#"<section class="estate">"#)
+        .expect("estate strip");
     let active = html
-        .find(r#"<h2 class="section-title">Active incidents</h2>"#)
+        .find(r#"<h2 class="ledger__title">Active incidents</h2>"#)
         .expect("active ledger");
     let maintenance = html
-        .find(r#"<h2 class="section-title">Maintenance</h2>"#)
+        .find(r#"<h2 class="ledger__title">Maintenance</h2>"#)
         .expect("maintenance section");
     let components = html
-        .find(r#"<section class="card status-components""#)
-        .expect("components card");
+        .find(r#"<section class="catalog""#)
+        .expect("catalog");
     let history = html
-        .find(r#"<section class="status-history""#)
+        .find(r#"<section class="history" id="past-incidents">"#)
         .expect("history section");
-    assert!(hero < snapshot, "hero leads");
-    assert!(snapshot < active, "snapshot precedes the active ledger");
+    assert!(hero < estate, "masthead leads");
+    assert!(estate < active, "the estate strip precedes the active ledger");
     assert!(active < maintenance, "active incidents precede maintenance");
-    assert!(maintenance < components, "maintenance precedes components");
+    assert!(maintenance < components, "maintenance precedes the catalog");
     assert!(components < history, "history closes the region");
     // The infra slot between components and history is covered by
     // `infra_block_renders_between_components_and_history` (no vitals poller runs here).
@@ -1545,127 +1628,76 @@ async fn lang_switch_marks_only_the_active_locale_for_assistive_tech() {
     );
 }
 
-/// The publication contrast floor ships in the served CSS: every state-ink override is
-/// scoped behind the public profile attribute (the operator desk keeps canonical Odyssey
-/// ink), each color-mix deepening keeps a plain-token fallback line ahead of it, the
-/// in-text RSS link gets an always-on underline, and the whole section sits inside the
-/// publication layer ahead of the operator desk layer.
+/// The publication layer ships in the served CSS: scoped to `.page-status`, it re-points the
+/// Odyssey palette names, carries both dark-theme hooks, keeps a plain-token fallback ahead of
+/// every color-mix deepening on a soft background, drops every retired public rule, and sits
+/// inside the publication layer ahead of the operator desk layer.
 #[tokio::test]
-async fn service_css_scopes_the_contrast_floor_to_the_public_profile() {
+async fn service_css_scopes_the_status_layer_to_the_public_page() {
     let state = build_dev_state().await;
-    let (status, body) = call(&state, get("/status")).await;
-    assert_eq!(status, StatusCode::OK);
-    let html = text(&body);
+    let response = app(state)
+        .oneshot(get("/assets/beacon-20260907.css"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let css = text(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    );
 
     for selector in [
-        r#"html[data-ody-profile="public"] .page-console .status-live .pill-ok"#,
-        r#"html[data-ody-profile="public"] .page-console .crow__state--ok"#,
-        r#"html[data-ody-profile="public"] .page-console .status-live .pill-warn"#,
-        r#"html[data-ody-profile="public"] .page-console .crow__state--warn"#,
-        r#"html[data-ody-profile="public"] .page-console .status-hero--warn .status-hero__affected"#,
-        r#"html[data-ody-profile="public"] .page-console .status-live .pill-info"#,
-        r#"html[data-ody-profile="public"] .page-console .crow__state--info { color: var(--accent-ink); }"#,
-        r#"html[data-ody-profile="public"] .page-console .status-hero--down .status-hero__affected"#,
-        r#"html[data-ody-profile="public"] .page-console .status-history .sub a"#,
-        r#"html[data-ody-profile="public"] .page-console .bc-infra__band"#,
-        r#"html[data-ody-profile="public"] .page-console .bc-infra__band--elevated"#,
-        r#"html[data-ody-profile="public"] .page-console .bc-infra__band--high"#,
-        r#"html[data-ody-profile="public"] .page-console .bc-infra__band--unknown"#,
+        ".page-status {",
+        r#"html[data-theme="dark"] .page-status {"#,
+        r#"html:not([data-theme="light"]) .page-status {"#,
+        ".page-status .mast {",
+        ".page-status .tiles {",
+        ".page-status .tile__detail {",
+        ".page-status .stages {",
+        ".page-status .cells {",
+        ".page-status .heat__cells {",
+        ".page-status .hrow {",
     ] {
         assert!(
-            html.contains(selector),
+            css.contains(selector),
             "served CSS keeps the public-scoped rule: {selector}"
         );
     }
-
-    // Progressive enhancement: a plain-token fallback precedes each color-mix deepening.
     for pair in [
-        "  color: var(--ok-ink);\n  color: color-mix(in srgb, var(--ok-ink) 80%, var(--ink));",
-        "  color: var(--warn-ink);\n  color: color-mix(in srgb, var(--warn-ink) 80%, var(--ink));",
-        "  color: var(--info-ink);\n  color: color-mix(in srgb, var(--info-ink) 80%, var(--ink));",
+        ".page-status .tile--degraded .tile__state { color: var(--warn-ink); color: color-mix(in srgb, var(--warn-ink) 80%, var(--ink)); }",
+        ".page-status .tile--down .tile__state { color: var(--down-ink); color: color-mix(in srgb, var(--down-ink) 80%, var(--ink)); }",
+        ".page-status .tile--maintenance .tile__state { color: var(--info-ink); color: color-mix(in srgb, var(--info-ink) 80%, var(--ink)); }",
     ] {
         assert!(
-            html.contains(pair),
+            css.contains(pair),
             "fallback declaration precedes color-mix: {pair}"
         );
     }
+    assert!(
+        css.contains("--bg: var(--st-canvas);"),
+        "Odyssey palette names are re-pointed under .page-status"
+    );
+    for residue in [
+        ".status-hero",
+        ".cgroup",
+        ".crow {",
+        ".bc-snapshot",
+        ".status-stage",
+        ".bc-infra",
+        ".bars {",
+        "status-window",
+    ] {
+        assert!(!css.contains(residue), "retired public rule stays gone: {residue}");
+    }
+    assert!(css.contains("@media (forced-colors: active)"));
 
-    // Infrastructure meter bands follow the same fallback + color-mix pattern (base and elevated
-    // only; high uses plain down-ink, unknown uses plain ink-3).
-    assert!(
-        html.contains("html[data-ody-profile=\"public\"] .page-console .bc-infra__band {\n  color: var(--ok-ink);\n  color: color-mix(in srgb, var(--ok-ink) 80%, var(--ink));"),
-        "bc-infra__band base keeps ok-ink fallback then 80% color-mix"
-    );
-    assert!(
-        html.contains("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--elevated {\n  color: var(--warn-ink);\n  color: color-mix(in srgb, var(--warn-ink) 80%, var(--ink));"),
-        "bc-infra__band--elevated keeps warn-ink fallback then 80% color-mix"
-    );
-    assert!(
-        html.contains("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--high {\n  color: var(--down-ink);"),
-        "bc-infra__band--high uses plain down-ink"
-    );
-    assert!(
-        html.contains("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--unknown {\n  color: var(--ink-3);"),
-        "bc-infra__band--unknown uses plain ink-3"
-    );
-
-    // Ordering: the four bc-infra__band rules appear after the RSS link underline and before
-    // the @media (forced-colors: active) block.
-    let rss_underline = html
-        .find("html[data-ody-profile=\"public\"] .page-console .status-history .sub a {")
-        .expect("RSS underline rule");
-    let infra_base = html
-        .find("html[data-ody-profile=\"public\"] .page-console .bc-infra__band {")
-        .expect("bc-infra__band base rule");
-    let infra_elevated = html
-        .find("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--elevated {")
-        .expect("bc-infra__band--elevated rule");
-    let infra_high = html
-        .find("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--high {")
-        .expect("bc-infra__band--high rule");
-    let infra_unknown = html
-        .find("html[data-ody-profile=\"public\"] .page-console .bc-infra__band--unknown {")
-        .expect("bc-infra__band--unknown rule");
-    let forced_colors = html
-        .find("@media (forced-colors: active) {")
-        .expect("forced-colors media query");
-    assert!(
-        rss_underline < infra_base,
-        "bc-infra__band base appears after RSS underline"
-    );
-    assert!(
-        infra_base < infra_elevated,
-        "bc-infra__band--elevated follows base"
-    );
-    assert!(
-        infra_elevated < infra_high,
-        "bc-infra__band--high follows elevated"
-    );
-    assert!(
-        infra_high < infra_unknown,
-        "bc-infra__band--unknown follows high"
-    );
-    assert!(
-        infra_unknown < forced_colors,
-        "all four bc-infra__band rules precede forced-colors block"
-    );
-
-    // link-in-text-block: the in-text RSS link no longer relies on color alone.
-    assert!(
-        html.contains("  text-decoration: underline;\n  text-underline-offset: 2px;"),
-        "in-text RSS link keeps an always-on underline"
-    );
-
-    // The floor lives inside the publication layer, ahead of the operator desk layer.
-    let publication = html
+    let publication = css
         .find("Public status · Beacon publication layer")
         .expect("publication marker");
-    let floor = html
-        .find("Publication contrast floor")
-        .expect("contrast floor comment");
-    let desk = html.find("Operator desk layer").expect("desk marker");
+    let scope = css.find(".page-status {").expect("scope rule");
+    let desk = css.find("Operator desk layer").expect("desk marker");
     assert!(
-        publication < floor && floor < desk,
-        "contrast floor sits inside the publication layer, before the desk layer"
+        publication < scope && scope < desk,
+        "the status layer sits inside the publication layer, before the desk layer"
     );
 }

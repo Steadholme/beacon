@@ -15,8 +15,8 @@ use serde::Deserialize;
 use crate::auth;
 use crate::error::AppError;
 use crate::handlers::{
-    app_css, dynamic_js, esc, fmt_countdown, fmt_datetime, fmt_latency, hv, incident_status_pill,
-    rel_time, render_theme_switch, severity_pill, status_pill, userbox, SHIELD_SVG,
+    dynamic_js, esc, fmt_countdown, fmt_datetime, fmt_latency, hv, incident_status_pill, rel_time,
+    render_theme_switch, severity_pill, status_pill, userbox, SHIELD_SVG,
 };
 use crate::model::{affected_names, maintenance_ongoing};
 use crate::notify;
@@ -603,7 +603,6 @@ async fn render_admin(state: &AppState, email: &str, csrf: &str, now: i64, theme
     let maintenances = state.store.list_maintenances().await;
     let counts = compute_desk_counts(&checks, &incidents, &maintenances, state, now).await;
     ADMIN_HTML
-        .replace("{{CSS}}", app_css())
         .replace("{{THEME}}", odyssey::html_theme_attr(theme))
         .replace("{{COLOR_SCHEME}}", odyssey::color_scheme_meta(theme))
         .replace("{{SHIELD}}", SHIELD_SVG)

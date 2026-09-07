@@ -14,6 +14,8 @@ pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8400";
 pub const DEFAULT_CHECK_INTERVAL_SECS: u64 = 30;
 /// Default per-probe timeout in seconds (`PROBE_TIMEOUT`).
 pub const DEFAULT_PROBE_TIMEOUT_SECS: u64 = 5;
+/// Default public status read-model cache window (`BEACON_STATUS_CACHE_TTL`).
+pub const DEFAULT_STATUS_CACHE_TTL_SECS: u64 = 15;
 
 /// One stable component on the public status surface.
 ///
@@ -44,6 +46,9 @@ pub struct Config {
     pub check_interval: Duration,
     /// Per-probe connect/response timeout (`PROBE_TIMEOUT`, seconds).
     pub probe_timeout: Duration,
+    /// Freshness window for the expensive public status read model
+    /// (`BEACON_STATUS_CACHE_TTL`, seconds). Zero disables it for deterministic tests/dev.
+    pub status_cache_ttl: Duration,
     /// Internal vitals service base URL (`VITALS_URL`), disabled when unset.
     pub vitals_url: Option<String>,
     /// Checks seeded into an EMPTY checks table on first boot (`BEACON_SEED` JSON, else the
@@ -67,6 +72,7 @@ impl Config {
             internal_bind_addr: None,
             check_interval: Duration::from_secs(DEFAULT_CHECK_INTERVAL_SECS),
             probe_timeout: Duration::from_secs(DEFAULT_PROBE_TIMEOUT_SECS),
+            status_cache_ttl: Duration::ZERO,
             vitals_url: None,
             seed: default_seed(),
             public_catalog: default_public_catalog(),
@@ -87,6 +93,11 @@ impl Config {
         if let Some(v) = env_nonempty("PROBE_TIMEOUT").and_then(|v| v.parse::<u64>().ok()) {
             config.probe_timeout = Duration::from_secs(v.max(1));
         }
+        config.status_cache_ttl = Duration::from_secs(
+            env_nonempty("BEACON_STATUS_CACHE_TTL")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(DEFAULT_STATUS_CACHE_TTL_SECS),
+        );
         config.vitals_url = env_nonempty("VITALS_URL");
         if let Some(raw) = env_nonempty("BEACON_SEED") {
             match parse_seed(&raw) {

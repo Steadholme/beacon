@@ -18,8 +18,9 @@ Beacon 是 Steadholme 主权基础设施栈中的 **uptime 监控** 服务：周
 | 端点 | 鉴权 | 说明 |
 |------|------|------|
 | `GET /healthz` | 内部 | 200 `ok`，容器 HEALTHCHECK 使用 |
-| `GET /status` | 公开 | 服务端渲染的公开状态页（总览横幅 + 组件状态药丸 + 可用率 + 事件） |
+| `GET /status` | 公开 | 服务端渲染的公开状态页（v2 · Status：状态即标题 + 全估算 30 天条 + 事故/维护账本 + 组件瓷砖网格 + 容量 + 14 天历史） |
 | `GET /api/status`（8400） | 公开 | 显式 catalog 投影的机器可读状态快照（JSON，30 天 daily evidence） |
+| `GET /assets/beacon-20260907.css` | 公开 | 版本化不可变样式表（Odyssey 基础 + `service.css`；改 CSS 时改日期） |
 | `GET /feed.xml` | 公开 | 仅含公开受影响组件的 incident RSS |
 | `POST /subscriptions` | 公开、feature-gated | Webhook 注册；默认 404，开启后执行 public-egress 校验与 double opt-in |
 | `GET /admin` | SSO | 运维仪表盘：检查项列表 + 发布事件表单（读 `X-Auth-Email`） |
@@ -29,6 +30,23 @@ Beacon 是 Steadholme 主权基础设施栈中的 **uptime 监控** 服务：周
 兼容字段 `components[].uptime_90d` 保留原 JSON 名称，避免破坏 Portal 等既有客户端；其值始终按同一响应的 `history_days` 计算。公网 read model 为 30 天，internal/operator read model 为 90 天，客户端不得再从字段名推断时间窗口。
 
 > 网关路由（部署期由 Sluice 添加）：`/status` 与 `/api/status` → `auth=public`；`/admin`（即「Beacon 管理端 / beacon」区域，前缀已覆盖 `/admin/incidents`）→ `auth=sso`。Sluice 不剥前缀，会把完整路径转发给上游，故服务内路径与网关前缀一致。
+
+## 公开状态页 `GET /status`（v2 · Status）
+
+设计稿在 Figma「Status」文件夹（fileKey `UTPp9yfkCnQs9XJ0NI8Pmy`）。词汇规则：页面上每个字符串都是**名字、数值或动作**——没有「System status」标题、没有「N monitored / N components」计数、全绿页面不重复 Operational。
+
+结构（`templates/status.html` + `handlers/status.rs`，样式全部落在 `service.css` 的 `.page-status` 作用域，管理台 `.bc-desk` 不受影响）：
+
+- **顶栏**：品牌、UTC 时钟（`<time data-clock>`，`static/status-page.js` 每 15s 校正）、语言/主题切换、「Get updates」原生 `<details>` 弹层（RSS / JSON / 启用时的 Webhook）。
+- **Masthead**：`overall` 状态即 `<h1 id="status-title">`（`status.hero.*.title`），形状+颜色双编码的 `.mark`（圆=正常、菱形=降级、方块=中断、环=维护、短横=待首检），meta 行只放数值与动作：30 天平均可用率、受影响数（仅非正常时）、更新时间、Refresh（Odyssey Wire，无 JS 时整页导航）。
+- **Estate strip**：30 个 UTC 日格，取所有公开组件当日最差状态（down > warn > ok，全无数据才 unknown），`data-date/data-uptime/data-inc` 供悬停提示；轴标只有起止日期。
+- **Active incidents / Maintenance**：事故卡用 StageTrack（Investigating → Identified → Monitoring → Resolved，`aria-current="step"`）替代状态药丸，受影响组件是带当前状态标记的 Chip；维护卡用等宽倒计时数值（`starts in / ends in`）+ UTC 窗口。
+- **Catalog**：按 catalog 分组渲染 `<section class="group group--{rollup}">`，成员是 `<details class="tile tile--{state}" name="tile">` 瓷砖（名字、标记、30 天迷你格、可用率、24h 平均延迟；只有非正常瓷砖才出现状态词），展开即 TileDetail 弹层（30d/24h/7d 可用率、带日期的完整日格、24h 延迟曲线、监控起始日）。`name="tile"` 保证同一时间只开一个；窄屏变成底部面板。
+- **Infrastructure**（有 Vitals 时）：三个容量仪表（最差主机）+ 24 小时热条。
+- **Past incidents**：最近 14 天内**已解决**的公开事故（进行中的在上方账本），空态一行。
+- **Channels / Footer**：RSS feed、JSON API 两个动作按钮（启用 webhook 时加 URL 表单），页脚三个动作 + 更新时间。
+
+`#status-live` 仍是唯一可替换的 Wire 区域：完整 SSR 与 `X-Wire: 1` 片段调用同一个渲染函数，页面无 JS 也完整可读（`<meta http-equiv="refresh" content="300">` 兜底）。
 
 ## 探针
 

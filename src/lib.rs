@@ -9,6 +9,7 @@
 //! - `GET  /healthz`                  liveness (container HEALTHCHECK)
 //! - `GET  /status`                   PUBLIC server-rendered status page (no auth)
 //! - `GET  /api/status`               PUBLIC machine-readable status JSON (no auth)
+//! - `GET  /assets/beacon-20260907.css` PUBLIC immutable shared stylesheet
 //! - `GET  /feed.xml`                 PUBLIC RSS 2.0 incident feed (no auth)
 //! - `POST /subscriptions`            PUBLIC webhook subscribe (double opt-in, no auth)
 //! - `GET  /subscriptions/confirm`    PUBLIC confirm a subscription (capability token)
@@ -48,6 +49,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub store: Arc<dyn Store>,
     pub vitals: Option<Arc<vitals::VitalsHandle>>,
+    pub public_status: Arc<model::PublicStatusCache>,
 }
 
 /// Build the router wiring all endpoints onto `state`.
@@ -62,6 +64,7 @@ pub fn app(state: AppState) -> Router {
         .route("/", get(handlers::status::status_page))
         .route("/status", get(handlers::status::status_page))
         .route("/api/status", get(handlers::status::api_status))
+        .route(handlers::APP_CSS_PATH, get(handlers::app_css_asset))
         .route("/feed.xml", get(handlers::feed::feed_xml))
         // --- public status-update subscriptions (webhook; no auth, double opt-in) ---
         .route("/subscriptions", post(handlers::subscriptions::subscribe))
@@ -122,10 +125,12 @@ pub async fn state_with(config: Config) -> AppState {
         .vitals_url
         .as_ref()
         .map(|u| Arc::new(vitals::VitalsHandle::new(u.clone())));
+    let public_status = Arc::new(model::PublicStatusCache::new(config.status_cache_ttl));
     AppState {
         config: Arc::new(config),
         store,
         vitals,
+        public_status,
     }
 }
 
@@ -174,12 +179,23 @@ pub async fn build_state_from_env() -> Result<AppState, String> {
         .vitals_url
         .as_ref()
         .map(|u| Arc::new(vitals::VitalsHandle::new(u.clone())));
+    let public_status = Arc::new(model::PublicStatusCache::new(config.status_cache_ttl));
 
-    Ok(AppState {
+    let state = AppState {
         config: Arc::new(config),
         store,
         vitals,
-    })
+        public_status,
+    };
+    state
+        .public_status
+        .warm(
+            Arc::clone(&state.store),
+            &state.config.public_catalog,
+            now_secs(),
+        )
+        .await;
+    Ok(state)
 }
 
 /// Seed the checks table from `seed` only when it is currently empty.

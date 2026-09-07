@@ -31,9 +31,10 @@ async fn public_status_resolves_locale_and_keeps_the_ssr_floor() {
     let html = text(&body);
     assert!(html.contains(r#"<html lang="zh-Hans""#));
     assert!(html.contains(r#"data-ody-profile="public""#));
-    assert!(html.contains("系统状态"));
-    assert!(html.contains("公开 · 只读"));
-    assert!(html.contains("刷新状态"));
+    assert!(html.contains("所有系统运行正常"), "the zh state headline is the page heading");
+    assert!(!html.contains("公开 · 只读"));
+    assert!(!html.contains("Steadholme 主权基础设施的实时可用性。"));
+    assert!(html.contains(">刷新</a>"), "localized refresh action");
     assert!(html.contains(r#"/_gw/lang?to=en"#));
     assert!(
         html.contains("<script"),
@@ -69,23 +70,23 @@ async fn evidence_window_copy_is_dynamic_and_localized() {
     for (lang, hero, title, ago, today) in [
         (
             "en",
-            "<strong>100.00%</strong> uptime · 30 days",
+            "<b>100.00%</b><small>30 days</small>",
             "Uptime over 30 days",
-            "30 days ago",
+            "24 hours",
             "Today",
         ),
         (
             "zh",
-            "<strong>100.00%</strong> 可用率 · 30 天",
+            "<b>100.00%</b><small>30 天</small>",
             "最近 30 天可用率",
-            "30 天前",
+            "24 小时",
             "今天",
         ),
         (
             "ja",
-            "<strong>100.00%</strong> 稼働率 · 30 日間",
+            "<b>100.00%</b><small>30 日間</small>",
             "過去 30 日間の稼働率",
-            "30 日前",
+            "24 時間",
             "今日",
         ),
     ] {
@@ -99,7 +100,7 @@ async fn evidence_window_copy_is_dynamic_and_localized() {
         let html = text(&body);
         assert!(html.contains(hero), "{lang}: localized hero window");
         assert!(html.contains(&format!(r#"title="{title}""#)));
-        assert!(html.contains(ago), "{lang}: localized evidence start");
+        assert!(html.contains(ago), "{lang}: localized detail window");
         assert!(html.contains(today), "{lang}: localized evidence end");
         assert!(!html.contains("90 days"), "{lang}: no stale 90-day copy");
     }
@@ -171,11 +172,8 @@ async fn zh_page_localizes_micro_copy_without_english_residue() {
         html.contains(r#"<span class="pill pill-down">严重</span>"#),
         "severity pill"
     );
-    assert!(html.contains("监控 2 个组件"), "component count meta");
-    assert!(
-        html.contains(r#"<span class="cgroup__count">2 个组件</span>"#),
-        "group member count"
-    );
+    assert!(!html.contains("监控 2 个组件"), "no component count meta");
+    assert!(!html.contains("2 个组件</span>"), "no group member count");
     assert!(
         html.contains(r#"<span class="pill pill-info">进行中</span>"#),
         "ongoing maintenance pill"
@@ -193,12 +191,12 @@ async fn zh_page_localizes_micro_copy_without_english_residue() {
         "timeline reported pill"
     );
     assert!(
-        html.contains(r#"<div class="incident__time">创建于 10 分钟前 · 最后更新 10 分钟前</div>"#),
+        html.contains(r#"<p class="incident__time">创建于 10 分钟前 · 最后更新 10 分钟前</p>"#),
         "active incident stamp"
     );
     assert!(
         html.contains(
-            r#"<div class="incident__time">创建于 2 小时前 · 解决于 1 小时前 · 持续 1 小时 0 分钟</div>"#
+            r#"<span class="hrow__times">创建于 2 小时前 · 解决于 1 小时前 · 持续 1 小时 0 分钟</span>"#
         ),
         "past incident stamp with duration"
     );
@@ -316,9 +314,9 @@ async fn ja_page_translates_severity_and_lifecycle_micro_copy() {
     assert!(html.contains("解決済み"));
     assert!(html.contains(r#"<details class="timeline"><summary>タイムライン (1)</summary>"#));
     assert!(html.contains(r#"<span class="pill pill-state">報告</span>"#));
-    assert!(html.contains(r#"<div class="incident__time">作成 10分前 · 最終更新 10分前</div>"#));
+    assert!(html.contains(r#"<p class="incident__time">作成 10分前 · 最終更新 10分前</p>"#));
     assert!(html.contains(
-        r#"<div class="incident__time">作成 2時間前 · 解決 1時間前 · 継続時間 1時間0分</div>"#
+        r#"<span class="hrow__times">作成 2時間前 · 解決 1時間前 · 継続時間 1時間0分</span>"#
     ));
     assert!(html.contains(r#"data-uptime="データなし""#));
     assert!(html.contains("初回チェック待ち"));
