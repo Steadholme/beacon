@@ -21,7 +21,7 @@ use axum::response::IntoResponse;
 pub const SERVICE_CSS: &str = include_str!("../../static/service.css");
 
 /// Versioned stylesheet URL. Change the date whenever the embedded CSS changes.
-pub const APP_CSS_PATH: &str = "/assets/beacon-20260910.css";
+pub const APP_CSS_PATH: &str = "/assets/beacon-20260907.css";
 
 static APP_CSS: OnceLock<String> = OnceLock::new();
 static DYNAMIC_JS: OnceLock<String> = OnceLock::new();

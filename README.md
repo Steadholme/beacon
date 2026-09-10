@@ -20,7 +20,7 @@ Beacon 是 Steadholme 主权基础设施栈中的 **uptime 监控** 服务：周
 | `GET /healthz` | 内部 | 200 `ok`，容器 HEALTHCHECK 使用 |
 | `GET /status` | 公开 | 服务端渲染的公开状态页（v2 · Status：状态即标题 + 全估算 30 天条 + 事故/维护账本 + 组件瓷砖网格 + 容量 + 14 天历史） |
 | `GET /api/status`（8400） | 公开 | 显式 catalog 投影的机器可读状态快照（JSON，30 天 daily evidence） |
-| `GET /assets/beacon-20260910.css` | 公开 | 版本化不可变样式表（Odyssey 基础 + `service.css`；改 CSS 时改日期） |
+| `GET /assets/beacon-20260907.css` | 公开 | 版本化不可变样式表（Odyssey 基础 + `service.css`；改 CSS 时改日期） |
 | `GET /feed.xml` | 公开 | 仅含公开受影响组件的 incident RSS |
 | `POST /subscriptions` | 公开、feature-gated | Webhook 注册；默认 404，开启后执行 public-egress 校验与 double opt-in |
 | `GET /admin` | SSO | 运维仪表盘：检查项列表 + 发布事件表单（读 `X-Auth-Email`） |

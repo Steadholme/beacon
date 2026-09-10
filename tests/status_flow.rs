@@ -150,7 +150,7 @@ async fn public_status_renders_without_auth() {
     assert!(html.contains(r#"<section class="channels" id="subscribe">"#));
     assert!(!html.contains(r#"action="/subscriptions""#));
     assert!(!html.contains("Webhook registration"));
-    assert!(html.contains(r#"<link rel="stylesheet" href="/assets/beacon-20260910.css">"#));
+    assert!(html.contains(r#"<link rel="stylesheet" href="/assets/beacon-20260907.css">"#));
     assert!(!html.contains("<style>"), "shared CSS stays out of HTML");
 }
 
@@ -1101,7 +1101,7 @@ async fn empty_incident_title_rejected() {
 async fn service_css_stays_unlayered_and_keeps_shared_chrome() {
     let state = build_dev_state().await;
     let css_response = app(state.clone())
-        .oneshot(get("/assets/beacon-20260910.css"))
+        .oneshot(get("/assets/beacon-20260907.css"))
         .await
         .unwrap();
     assert_eq!(css_response.status(), StatusCode::OK);
@@ -1636,7 +1636,7 @@ async fn lang_switch_marks_only_the_active_locale_for_assistive_tech() {
 async fn service_css_scopes_the_status_layer_to_the_public_page() {
     let state = build_dev_state().await;
     let response = app(state)
-        .oneshot(get("/assets/beacon-20260910.css"))
+        .oneshot(get("/assets/beacon-20260907.css"))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);

@@ -9,7 +9,7 @@
 //! - `GET  /healthz`                  liveness (container HEALTHCHECK)
 //! - `GET  /status`                   PUBLIC server-rendered status page (no auth)
 //! - `GET  /api/status`               PUBLIC machine-readable status JSON (no auth)
-//! - `GET  /assets/beacon-20260910.css` PUBLIC immutable shared stylesheet
+//! - `GET  /assets/beacon-20260907.css` PUBLIC immutable shared stylesheet
 //! - `GET  /feed.xml`                 PUBLIC RSS 2.0 incident feed (no auth)
 //! - `POST /subscriptions`            PUBLIC webhook subscribe (double opt-in, no auth)
 //! - `GET  /subscriptions/confirm`    PUBLIC confirm a subscription (capability token)
